@@ -1,0 +1,807 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WRF ARG 4K — visor</title>
+  <style>
+    :root {
+      --bg: #0e141b;
+      --panel: #17202a;
+      --line: #2a3848;
+      --text: #e7eef6;
+      --muted: #8ea0b5;
+      --accent: #3d9cf0;
+      --accent-dim: #1d4f80;
+      --danger: #e07a72;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 16px 20px 8px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 1.15rem;
+      font-weight: 650;
+      letter-spacing: 0.01em;
+    }
+
+    header p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 18px 28px;
+      padding: 8px 20px 12px;
+    }
+
+    .group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .label {
+      color: var(--muted);
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    select {
+      font: inherit;
+      color: var(--text);
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 10px;
+      max-width: 100%;
+    }
+
+    .cycles { display: flex; gap: 6px; }
+
+    button {
+      font: inherit;
+      color: var(--text);
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      cursor: pointer;
+    }
+
+    button:hover { border-color: var(--accent); }
+    button:disabled {
+      opacity: 0.35;
+      cursor: default;
+      border-color: var(--line);
+    }
+
+    .cycles button {
+      min-width: 64px;
+      padding: 6px 8px 4px;
+    }
+
+    .cycles button[aria-pressed="true"] {
+      background: var(--accent-dim);
+      border-color: var(--accent);
+    }
+
+    .badge {
+      display: block;
+      min-height: 0.85rem;
+      color: var(--accent);
+      font-size: 0.62rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .nav button {
+      width: 42px;
+      height: 42px;
+      font-size: 1.15rem;
+    }
+
+    .hour-readout {
+      min-width: 4.5rem;
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+      font-size: 1.35rem;
+      font-weight: 650;
+    }
+
+    .hour-readout small {
+      display: block;
+      color: var(--muted);
+      font-size: 0.7rem;
+      font-weight: 500;
+      letter-spacing: 0.04em;
+    }
+
+    input[type="range"] {
+      width: min(420px, 58vw);
+      accent-color: var(--accent);
+    }
+
+    .cache-line {
+      padding: 0 20px 12px;
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+
+    .bar {
+      height: 4px;
+      margin-top: 6px;
+      background: var(--line);
+      border-radius: 99px;
+      overflow: hidden;
+    }
+
+    .bar span {
+      display: block;
+      height: 100%;
+      width: 0;
+      background: var(--accent);
+    }
+
+    .stage {
+      margin: 0 20px 20px;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      min-height: 240px;
+      display: grid;
+      place-items: center;
+      overflow: auto;
+      position: relative;
+    }
+
+    .stage img {
+      display: block;
+      max-width: 100%;
+      height: auto;
+    }
+
+    .stage img.is-hidden { display: none; }
+
+    .status {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      text-align: center;
+      color: #5c6b7a;
+    }
+
+    .status.error { color: var(--danger); }
+
+    .tabs {
+      display: flex;
+      gap: 8px;
+      padding: 0 20px 8px;
+    }
+
+    .tabs a {
+      color: var(--muted);
+      text-decoration: none;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 6px 12px;
+    }
+
+    .tabs a.active {
+      color: var(--text);
+      background: var(--accent-dim);
+      border-color: var(--accent);
+    }
+
+    .search {
+      position: relative;
+      width: min(420px, 72vw);
+    }
+
+    .search input {
+      font: inherit;
+      color: var(--text);
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 10px;
+      width: 100%;
+    }
+
+    .results {
+      position: absolute;
+      z-index: 2;
+      top: calc(100% + 4px);
+      left: 0;
+      right: 0;
+      list-style: none;
+      margin: 0;
+      padding: 4px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      max-height: 280px;
+      overflow: auto;
+    }
+
+    .results button {
+      display: block;
+      width: 100%;
+      text-align: left;
+      background: transparent;
+      border: 0;
+      border-radius: 6px;
+      padding: 8px 10px;
+    }
+
+    .results button:hover { background: var(--accent-dim); }
+
+    .results small {
+      display: block;
+      color: var(--muted);
+      font-size: 0.75rem;
+    }
+
+    .chosen {
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>WRF ARG 4K</h1>
+    <p id="subtitle">Cargando campos…</p>
+  </header>
+
+  <nav class="tabs">
+    <a id="tab-campos" href="/">Campos</a>
+    <a id="tab-meteogramas" href="/meteogramas">Meteogramas</a>
+  </nav>
+
+  <div id="view-campos">
+  <div class="controls">
+    <div class="group">
+      <span class="label">Campo</span>
+      <select id="field" aria-label="Campo"></select>
+    </div>
+
+    <div class="group">
+      <span class="label">Ciclo</span>
+      <div class="cycles" id="cycles" role="group" aria-label="Ciclo del modelo"></div>
+      <span class="label">UTC</span>
+    </div>
+
+    <div class="group nav">
+      <span class="label">Pronóstico</span>
+      <button type="button" id="prev" aria-label="Hora anterior">◀</button>
+      <div class="hour-readout" id="readout">—</div>
+      <button type="button" id="next" aria-label="Hora siguiente">▶</button>
+      <input id="hour" type="range" min="0" max="72" value="0" aria-label="Hora de pronóstico">
+    </div>
+  </div>
+
+  <div class="cache-line">
+    <div id="cache-label">Preparando caché…</div>
+    <div class="bar" aria-hidden="true"><span id="cache-bar"></span></div>
+  </div>
+
+  <div class="stage">
+    <div class="status" id="status">Cargando…</div>
+    <img id="frame" alt="Pronóstico WRF ARG 4K" class="is-hidden">
+  </div>
+  </div>
+
+  <div id="view-meteogramas" hidden>
+    <div class="controls">
+      <div class="group">
+        <span class="label">Estación</span>
+        <div class="search">
+          <input id="station-q" type="search" placeholder="SABE o Aeroparque" autocomplete="off" aria-label="Buscar estación">
+          <ul class="results" id="station-results" hidden></ul>
+        </div>
+      </div>
+      <span class="chosen" id="station-chosen"></span>
+      <div class="group">
+        <span class="label">Ciclo</span>
+        <div class="cycles" id="met-cycles" role="group" aria-label="Ciclo del meteograma"></div>
+        <span class="label">UTC</span>
+      </div>
+    </div>
+    <div class="cache-line">
+      <div id="met-cache-label">Buscá por código OACI o por nombre.</div>
+      <div class="bar" aria-hidden="true"><span id="met-cache-bar"></span></div>
+    </div>
+    <div class="stage">
+      <div class="status" id="met-status">Buscá por código OACI o por nombre.</div>
+      <img id="met-frame" alt="Meteograma WRF" class="is-hidden">
+    </div>
+  </div>
+
+  <script>
+    const CYCLES = ["00", "06", "12", "18"];
+
+    const fieldSelect = document.getElementById("field");
+    const cyclesEl = document.getElementById("cycles");
+    const img = document.getElementById("frame");
+    const statusEl = document.getElementById("status");
+    const hourInput = document.getElementById("hour");
+    const readout = document.getElementById("readout");
+    const prevBtn = document.getElementById("prev");
+    const nextBtn = document.getElementById("next");
+    const subtitle = document.getElementById("subtitle");
+    const cacheLabel = document.getElementById("cache-label");
+    const cacheBar = document.getElementById("cache-bar");
+
+    let field = null;
+    let hours = [];
+    let cycle = null;
+    let hour = null;
+    let vigente = null;
+    let cycleInfo = [];
+    let session = 0;
+    let requestId = 0;
+
+    function pad(value) {
+      return String(value).padStart(3, "0");
+    }
+
+    function localUrl(hourValue, version) {
+      const stamp = version ? `?v=${encodeURIComponent(version)}` : "";
+      return `/img/${field.id}/${cycle}/${hourValue}${stamp}`;
+    }
+
+    function formatTime(iso) {
+      if (!iso) return "";
+      return new Date(iso).toLocaleString("es-AR", {
+        day: "2-digit",
+        month: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    }
+
+    function selectedMtime() {
+      const info = cycleInfo.find((item) => item.cycle === cycle);
+      return info && info.mtime ? info.mtime : "";
+    }
+
+    function renderCycles() {
+      cyclesEl.innerHTML = "";
+      for (const id of CYCLES) {
+        const info = cycleInfo.find((item) => item.cycle === id);
+        const button = document.createElement("button");
+        button.type = "button";
+        button.dataset.cycle = id;
+        button.setAttribute("aria-pressed", id === cycle ? "true" : "false");
+        const badge = id === vigente ? "vigente" : "";
+        button.innerHTML = `${id}<span class="badge">${badge}</span>`;
+        if (info && !info.available) button.disabled = true;
+        cyclesEl.appendChild(button);
+      }
+    }
+
+    function renderProgress(job) {
+      const total = job.total || hours.length || 1;
+      const done = job.done || 0;
+      const pct = Math.round((done / total) * 100);
+      cacheBar.style.width = `${job.complete ? 100 : pct}%`;
+      if (job.error) {
+        cacheLabel.textContent = job.error;
+        return;
+      }
+      if (job.running && !job.mtime) {
+        cacheLabel.textContent = "Revisando cuál es el ciclo más nuevo…";
+        return;
+      }
+      const when = formatTime(job.mtime || selectedMtime());
+      const published = when ? ` · publicado ${when}` : "";
+      if (job.complete) {
+        cacheLabel.textContent = `${total} imágenes en caché · ciclo ${cycle} UTC${published}`;
+        return;
+      }
+      cacheLabel.textContent = `Guardando imágenes ${done}/${total}${published}`;
+    }
+
+    function render() {
+      if (!field || cycle == null || hour == null) return;
+      const index = hours.indexOf(hour);
+      const token = ++requestId;
+      const version = selectedMtime();
+
+      readout.innerHTML = `F${pad(hour)}<small>${field.step} ${hour}</small>`;
+      hourInput.min = String(hours[0]);
+      hourInput.max = String(hours[hours.length - 1]);
+      hourInput.value = String(hour);
+      prevBtn.disabled = index <= 0;
+      nextBtn.disabled = index < 0 || index >= hours.length - 1;
+      subtitle.textContent = field.name;
+
+      const nextSrc = localUrl(hour, version);
+      const showing = img.dataset.shown === "1";
+      if (!showing) {
+        statusEl.className = "status";
+        statusEl.textContent = "Cargando…";
+        statusEl.hidden = false;
+      }
+
+      const preload = new Image();
+      preload.onload = () => {
+        if (token !== requestId) return;
+        img.alt = `${field.name}, ciclo ${cycle} UTC, F${pad(hour)}`;
+        img.src = nextSrc;
+        img.dataset.shown = "1";
+        img.classList.remove("is-hidden");
+        statusEl.hidden = true;
+      };
+      preload.onerror = () => {
+        if (token !== requestId) return;
+        if (!showing) img.classList.add("is-hidden");
+        statusEl.hidden = false;
+        statusEl.className = "status error";
+        statusEl.textContent = "No se pudo cargar esta imagen.";
+      };
+      preload.src = nextSrc;
+    }
+
+    function warm(version) {
+      for (const value of hours) {
+        const preload = new Image();
+        preload.src = localUrl(value, version);
+      }
+    }
+
+    async function followCache(token) {
+      const response = await fetch(`/api/cache?field=${field.id}&cycle=${cycle}`, { method: "POST" });
+      if (!response.ok) throw new Error("No se pudo iniciar la caché");
+      let job = await response.json();
+      while (token === session) {
+        renderProgress(job);
+        if (job.complete) {
+          warm(job.mtime || selectedMtime());
+          return;
+        }
+        if (job.error) return;
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        if (token !== session) return;
+        const poll = await fetch(`/api/cache?field=${field.id}&cycle=${cycle}`);
+        job = await poll.json();
+      }
+    }
+
+    async function loadField(fieldId, keepHour) {
+      const token = ++session;
+      const response = await fetch(`/api/status?field=${encodeURIComponent(fieldId)}`);
+      if (!response.ok) throw new Error("No se pudo leer el campo");
+      const status = await response.json();
+      if (token !== session) return;
+
+      field = status.field;
+      hours = status.field.hours;
+      vigente = status.vigente;
+      cycleInfo = status.cycles;
+      cycle = vigente || cycleInfo.find((item) => item.available)?.cycle || null;
+      if (!keepHour || !hours.includes(hour)) hour = hours[0];
+      if (!cycle) {
+        cacheLabel.textContent = "No pude determinar el ciclo vigente. Revisá la VPN.";
+        statusEl.className = "status error";
+        statusEl.textContent = "No hay un ciclo disponible.";
+        return;
+      }
+      renderCycles();
+      render();
+      await followCache(token);
+    }
+
+    async function loadCycle(nextCycle) {
+      if (nextCycle === cycle) return;
+      const token = ++session;
+      cycle = nextCycle;
+      renderCycles();
+      render();
+      await followCache(token);
+    }
+
+    function step(delta) {
+      const index = hours.indexOf(hour);
+      const next = hours[index + delta];
+      if (next === undefined) return;
+      hour = next;
+      render();
+    }
+
+    fieldSelect.addEventListener("change", () => {
+      loadField(fieldSelect.value, false).catch(showFailure);
+    });
+
+    cyclesEl.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-cycle]");
+      if (!button || button.disabled) return;
+      loadCycle(button.dataset.cycle).catch(showFailure);
+    });
+
+    prevBtn.addEventListener("click", () => step(-1));
+    nextBtn.addEventListener("click", () => step(1));
+    hourInput.addEventListener("input", () => {
+      const value = Number(hourInput.value);
+      hour = hours.reduce((best, item) =>
+        Math.abs(item - value) < Math.abs(best - value) ? item : best
+      );
+      render();
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (document.getElementById("view-campos").hidden) return;
+      if (event.target.closest("input, select, textarea")) return;
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        step(-1);
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        step(1);
+      }
+    });
+
+    function showFailure(error) {
+      statusEl.hidden = false;
+      statusEl.className = "status error";
+      statusEl.textContent = error.message || "No se pudo cargar el visor.";
+    }
+
+    async function init() {
+      const response = await fetch("/api/fields");
+      const payload = await response.json();
+      fieldSelect.innerHTML = "";
+      for (const item of payload.fields) {
+        const option = document.createElement("option");
+        option.value = item.id;
+        option.textContent = item.name;
+        fieldSelect.appendChild(option);
+      }
+      await loadField(payload.fields[0].id, false);
+    }
+
+    const metCyclesEl = document.getElementById("met-cycles");
+    const metImg = document.getElementById("met-frame");
+    const metStatus = document.getElementById("met-status");
+    const metCacheLabel = document.getElementById("met-cache-label");
+    const metCacheBar = document.getElementById("met-cache-bar");
+    const stationInput = document.getElementById("station-q");
+    const stationResults = document.getElementById("station-results");
+    const stationChosen = document.getElementById("station-chosen");
+
+    let metStation = null;
+    let metCycle = null;
+    let metVigente = null;
+    let metCycleInfo = [];
+    let metSession = 0;
+    let metRequest = 0;
+    let searchTimer = 0;
+
+    function metMtime() {
+      const info = metCycleInfo.find((item) => item.cycle === metCycle);
+      return info && info.mtime ? info.mtime : "";
+    }
+
+    function renderMetCycles() {
+      metCyclesEl.innerHTML = "";
+      for (const id of CYCLES) {
+        const info = metCycleInfo.find((item) => item.cycle === id);
+        const button = document.createElement("button");
+        button.type = "button";
+        button.dataset.cycle = id;
+        button.setAttribute("aria-pressed", id === metCycle ? "true" : "false");
+        button.innerHTML = `${id}<span class="badge">${id === metVigente ? "vigente" : ""}</span>`;
+        if (info && !info.available) button.disabled = true;
+        metCyclesEl.appendChild(button);
+      }
+    }
+
+    function renderMetProgress(job) {
+      metCacheBar.style.width = job.complete ? "100%" : "40%";
+      if (job.error) {
+        metCacheLabel.textContent = job.error;
+        return;
+      }
+      const when = formatTime(job.mtime || metMtime());
+      const published = when ? ` · publicado ${when}` : "";
+      if (job.complete) {
+        metCacheLabel.textContent = `Imagen en caché · ciclo ${metCycle} UTC${published}`;
+        return;
+      }
+      metCacheLabel.textContent = job.mtime ? `Guardando meteograma${published}` : "Revisando el ciclo…";
+    }
+
+    function renderMeteogram() {
+      if (!metStation || !metCycle) return;
+      const token = ++metRequest;
+      const version = metMtime();
+      const src = `/img/meteogram/${metStation.cipi}/${metCycle}${version ? `?v=${encodeURIComponent(version)}` : ""}`;
+      const showing = metImg.dataset.shown === "1";
+      if (!showing) {
+        metStatus.className = "status";
+        metStatus.textContent = "Cargando…";
+        metStatus.hidden = false;
+      }
+      const preload = new Image();
+      preload.onload = () => {
+        if (token !== metRequest) return;
+        metImg.alt = `Meteograma ${metStation.name}, ciclo ${metCycle} UTC`;
+        metImg.src = src;
+        metImg.dataset.shown = "1";
+        metImg.classList.remove("is-hidden");
+        metStatus.hidden = true;
+      };
+      preload.onerror = () => {
+        if (token !== metRequest) return;
+        if (!showing) metImg.classList.add("is-hidden");
+        metStatus.hidden = false;
+        metStatus.className = "status error";
+        metStatus.textContent = "No se pudo cargar este meteograma.";
+      };
+      preload.src = src;
+    }
+
+    async function followMetCache(token) {
+      const response = await fetch(`/api/meteogram/cache?cipi=${metStation.cipi}&cycle=${metCycle}`, { method: "POST" });
+      if (!response.ok) throw new Error("No se pudo guardar el meteograma");
+      let job = await response.json();
+      while (token === metSession) {
+        renderMetProgress(job);
+        if (job.complete || job.error) return;
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        if (token !== metSession) return;
+        const poll = await fetch(`/api/meteogram/cache?cipi=${metStation.cipi}&cycle=${metCycle}`);
+        job = await poll.json();
+      }
+    }
+
+    async function openStation(station, keepCycle) {
+      const token = ++metSession;
+      metStation = station;
+      subtitle.textContent = station.name;
+      stationChosen.textContent = [station.name, station.oaci, station.cipi].filter(Boolean).join(" · ");
+      stationResults.hidden = true;
+      const response = await fetch(`/api/meteogram/status?cipi=${station.cipi}`);
+      if (!response.ok) throw new Error("No se pudo leer el ciclo del meteograma");
+      const status = await response.json();
+      if (token !== metSession) return;
+      metCycleInfo = status.cycles;
+      metVigente = status.vigente;
+      if (!keepCycle || !metCycleInfo.some((item) => item.cycle === metCycle && item.available)) {
+        metCycle = status.vigente;
+      }
+      if (!metCycle) {
+        metCacheLabel.textContent = "No pude determinar el ciclo vigente. Revisá la VPN.";
+        metStatus.className = "status error";
+        metStatus.hidden = false;
+        metStatus.textContent = "No hay un ciclo disponible.";
+        return;
+      }
+      renderMetCycles();
+      renderMeteogram();
+      await followMetCache(token);
+    }
+
+    function rememberStation(station) {
+      const code = station.oaci || station.cipi;
+      const next = `/meteogramas/${encodeURIComponent(code)}`;
+      if (location.pathname !== next) history.pushState({}, "", next);
+    }
+
+    async function searchStations(query) {
+      const response = await fetch(`/api/stations?q=${encodeURIComponent(query)}`);
+      const payload = await response.json();
+      stationResults.innerHTML = "";
+      if (!payload.stations.length) {
+        stationResults.hidden = true;
+        return;
+      }
+      for (const station of payload.stations) {
+        const item = document.createElement("li");
+        const button = document.createElement("button");
+        button.type = "button";
+        button.innerHTML = `${station.name}<small>${[station.oaci, station.cipi].filter(Boolean).join(" · ")}</small>`;
+        button.addEventListener("click", () => {
+          stationInput.value = station.name;
+          rememberStation(station);
+          openStation(station, false).catch(showMetFailure);
+        });
+        item.appendChild(button);
+        stationResults.appendChild(item);
+      }
+      stationResults.hidden = false;
+    }
+
+    function showMetFailure(error) {
+      metStatus.hidden = false;
+      metStatus.className = "status error";
+      metStatus.textContent = error.message || "No se pudo cargar el meteograma.";
+    }
+
+    async function initMeteogramas() {
+      subtitle.textContent = "Meteogramas";
+      const code = decodeURIComponent(location.pathname.split("/").filter(Boolean)[1] || "");
+      if (!code) return;
+      const response = await fetch(`/api/stations/resolve?code=${encodeURIComponent(code)}`);
+      const station = await response.json();
+      if (!response.ok) throw new Error(station.error || "No encontré esa estación");
+      stationInput.value = station.name;
+      await openStation(station, false);
+    }
+
+    stationInput.addEventListener("input", () => {
+      window.clearTimeout(searchTimer);
+      const query = stationInput.value.trim();
+      if (query.length < 2) {
+        stationResults.hidden = true;
+        return;
+      }
+      searchTimer = window.setTimeout(() => {
+        searchStations(query).catch(showMetFailure);
+      }, 180);
+    });
+
+    stationInput.addEventListener("keydown", async (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      const query = stationInput.value.trim();
+      if (query.length < 2) return;
+      const response = await fetch(`/api/stations/resolve?code=${encodeURIComponent(query)}`);
+      const station = await response.json();
+      if (!response.ok) {
+        showMetFailure(new Error(station.error || "No encontré esa estación"));
+        return;
+      }
+      rememberStation(station);
+      openStation(station, false).catch(showMetFailure);
+    });
+
+    metCyclesEl.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-cycle]");
+      if (!button || button.disabled || !metStation) return;
+      metCycle = button.dataset.cycle;
+      renderMetCycles();
+      renderMeteogram();
+      followMetCache(++metSession).catch(showMetFailure);
+    });
+
+    window.addEventListener("popstate", () => {
+      if (!document.getElementById("view-meteogramas").hidden) {
+        initMeteogramas().catch(showMetFailure);
+      }
+    });
+
+    const meteogramView = location.pathname === "/meteogramas" || location.pathname.startsWith("/meteogramas/");
+    document.getElementById("view-campos").hidden = meteogramView;
+    document.getElementById("view-meteogramas").hidden = !meteogramView;
+    document.getElementById("tab-campos").classList.toggle("active", !meteogramView);
+    document.getElementById("tab-meteogramas").classList.toggle("active", meteogramView);
+
+    if (meteogramView) initMeteogramas().catch(showMetFailure);
+    else init().catch(showFailure);
+  </script>
+</body>
+</html>

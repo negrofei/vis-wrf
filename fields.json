@@ -1,0 +1,21 @@
+{
+  "base_url": "https://repo2.smn.gob.ar/archivos/dpa/HPC/prod/intra/",
+  "cycles": ["00", "06", "12", "18"],
+  "fields": [
+    {
+      "id": "pp01h",
+      "name": "Precipitación acumulada horaria",
+      "product": "WRF_ARG4K.FCST_REGION_PP01H_U10_V10_R01",
+      "hour_from": 0,
+      "hour_to": 72,
+      "step": "hora"
+    },
+    {
+      "id": "pp24h",
+      "name": "Precipitación acumulada diaria",
+      "product": "WRF_ARG4K.FCST_REGION_PP24H_WSPD10MAX24H_R01",
+      "hours": [1, 2, 3],
+      "step": "día"
+    }
+  ]
+}
