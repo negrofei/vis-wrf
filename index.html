@@ -268,6 +268,69 @@
       color: var(--muted);
       font-size: 0.85rem;
     }
+
+    .toggle-compare {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+    }
+
+    .toggle-compare input {
+      width: 18px;
+      height: 18px;
+      accent-color: var(--accent);
+    }
+
+    .stage-container {
+      display: flex;
+      gap: 12px;
+      margin: 0 20px 20px;
+    }
+
+    .stage-container .stage {
+      margin: 0;
+      flex: 1;
+      min-width: 0;
+    }
+
+    .stage-container.single .stage:last-child {
+      display: none;
+    }
+
+    .stage-label {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      background: rgba(0, 0, 0, 0.7);
+      color: var(--text);
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      z-index: 1;
+    }
+
+    .field-selectors {
+      display: flex;
+      gap: 16px;
+      align-items: center;
+    }
+
+    .field-selectors .field-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .field-selectors .field-group.hidden {
+      display: none;
+    }
+
+    @media (max-width: 900px) {
+      .stage-container:not(.single) {
+        flex-direction: column;
+      }
+    }
   </style>
 </head>
 <body>
@@ -284,9 +347,19 @@
 
   <div id="view-campos">
   <div class="controls">
-    <div class="group">
-      <span class="label">Campo</span>
-      <select id="field" aria-label="Campo"></select>
+    <div class="field-selectors">
+      <div class="field-group">
+        <span class="label">Campo A</span>
+        <select id="field" aria-label="Campo A"></select>
+      </div>
+      <div class="field-group hidden" id="field-b-group">
+        <span class="label">Campo B</span>
+        <select id="field-b" aria-label="Campo B"></select>
+      </div>
+      <label class="toggle-compare">
+        <input type="checkbox" id="compare-toggle" aria-label="Comparar dos campos">
+        <span>Comparar</span>
+      </label>
     </div>
 
     <div class="group">
@@ -309,9 +382,17 @@
     <div class="bar" aria-hidden="true"><span id="cache-bar"></span></div>
   </div>
 
-  <div class="stage">
-    <div class="status" id="status">Cargando…</div>
-    <img id="frame" alt="Pronóstico WRF ARG 4K" class="is-hidden">
+  <div class="stage-container single" id="stage-container">
+    <div class="stage">
+      <div class="stage-label" id="stage-label-a" hidden></div>
+      <div class="status" id="status">Cargando…</div>
+      <img id="frame" alt="Pronóstico WRF ARG 4K" class="is-hidden">
+    </div>
+    <div class="stage">
+      <div class="stage-label" id="stage-label-b" hidden></div>
+      <div class="status" id="status-b">Cargando…</div>
+      <img id="frame-b" alt="Pronóstico WRF ARG 4K (comparación)" class="is-hidden">
+    </div>
   </div>
   </div>
 
@@ -390,9 +471,17 @@
     const CYCLES = ["00", "06", "12", "18"];
 
     const fieldSelect = document.getElementById("field");
+    const fieldBSelect = document.getElementById("field-b");
+    const fieldBGroup = document.getElementById("field-b-group");
+    const compareToggle = document.getElementById("compare-toggle");
+    const stageContainer = document.getElementById("stage-container");
+    const stageLabelA = document.getElementById("stage-label-a");
+    const stageLabelB = document.getElementById("stage-label-b");
     const cyclesEl = document.getElementById("cycles");
     const img = document.getElementById("frame");
+    const imgB = document.getElementById("frame-b");
     const statusEl = document.getElementById("status");
+    const statusBEl = document.getElementById("status-b");
     const hourInput = document.getElementById("hour");
     const readout = document.getElementById("readout");
     const prevBtn = document.getElementById("prev");
@@ -401,22 +490,27 @@
     const cacheLabel = document.getElementById("cache-label");
     const cacheBar = document.getElementById("cache-bar");
 
+    let fieldsCatalog = [];
     let field = null;
+    let fieldB = null;
     let hours = [];
     let cycle = null;
     let hour = null;
     let vigente = null;
     let cycleInfo = [];
+    let cycleInfoB = [];
+    let compareMode = false;
     let session = 0;
     let requestId = 0;
+    let requestIdB = 0;
 
     function pad(value) {
       return String(value).padStart(3, "0");
     }
 
-    function localUrl(hourValue, version) {
+    function localUrlFor(fieldObj, hourValue, version) {
       const stamp = version ? `?v=${encodeURIComponent(version)}` : "";
-      return `/img/${field.id}/${cycle}/${hourValue}${stamp}`;
+      return `/img/${fieldObj.id}/${cycle}/${hourValue}${stamp}`;
     }
 
     function formatTime(iso) {
@@ -429,9 +523,33 @@
       });
     }
 
-    function selectedMtime() {
-      const info = cycleInfo.find((item) => item.cycle === cycle);
+    function mtimeFrom(infoList) {
+      const info = infoList.find((item) => item.cycle === cycle);
       return info && info.mtime ? info.mtime : "";
+    }
+
+    function setCompareMode(enabled) {
+      compareMode = enabled;
+      compareToggle.checked = enabled;
+      fieldBGroup.classList.toggle("hidden", !enabled);
+      stageContainer.classList.toggle("single", !enabled);
+      stageLabelA.hidden = !enabled;
+      stageLabelB.hidden = !enabled;
+      if (enabled && field) {
+        stageLabelA.textContent = field.name;
+        if (fieldB) stageLabelB.textContent = fieldB.name;
+      }
+    }
+
+    function fillFieldSelect(select, selectedId) {
+      select.innerHTML = "";
+      for (const item of fieldsCatalog) {
+        const option = document.createElement("option");
+        option.value = item.id;
+        option.textContent = item.name;
+        if (item.id === selectedId) option.selected = true;
+        select.appendChild(option);
+      }
     }
 
     function renderCycles() {
@@ -449,99 +567,141 @@
       }
     }
 
-    function renderProgress(job) {
-      const total = job.total || hours.length || 1;
-      const done = job.done || 0;
-      const pct = Math.round((done / total) * 100);
-      cacheBar.style.width = `${job.complete ? 100 : pct}%`;
-      if (job.error) {
-        cacheLabel.textContent = job.error;
+    function renderProgress(jobA, jobB) {
+      const jobs = compareMode && jobB ? [jobA, jobB] : [jobA];
+      const total = jobs.reduce((sum, job) => sum + (job.total || hours.length || 1), 0);
+      const done = jobs.reduce((sum, job) => sum + (job.done || 0), 0);
+      const complete = jobs.every((job) => job.complete);
+      const error = jobs.map((job) => job.error).filter(Boolean).join(" · ");
+      const pct = Math.round((done / Math.max(total, 1)) * 100);
+      cacheBar.style.width = `${complete ? 100 : pct}%`;
+      if (error) {
+        cacheLabel.textContent = error;
         return;
       }
-      if (job.running && !job.mtime) {
+      if (jobs.some((job) => job.running && !job.mtime)) {
         cacheLabel.textContent = "Revisando cuál es el ciclo más nuevo…";
         return;
       }
-      const when = formatTime(job.mtime || selectedMtime());
+      const when = formatTime(jobA.mtime || mtimeFrom(cycleInfo));
       const published = when ? ` · publicado ${when}` : "";
-      if (job.complete) {
+      if (complete) {
         cacheLabel.textContent = `${total} imágenes en caché · ciclo ${cycle} UTC${published}`;
         return;
       }
       cacheLabel.textContent = `Guardando imágenes ${done}/${total}${published}`;
     }
 
-    function render() {
-      if (!field || cycle == null || hour == null) return;
-      const index = hours.indexOf(hour);
-      const token = ++requestId;
-      const version = selectedMtime();
+    function renderPanel(fieldObj, imageEl, statusNode, getToken, version, labelEl) {
+      if (!fieldObj || cycle == null || hour == null) return;
+      const token = getToken();
+      if (labelEl && compareMode) {
+        labelEl.hidden = false;
+        labelEl.textContent = fieldObj.name;
+      }
+      const nextSrc = localUrlFor(fieldObj, hour, version);
+      const showing = imageEl.dataset.shown === "1";
+      if (!showing) {
+        statusNode.className = "status";
+        statusNode.textContent = "Cargando…";
+        statusNode.hidden = false;
+      }
+      const preload = new Image();
+      preload.onload = () => {
+        if (token !== getToken()) return;
+        imageEl.alt = `${fieldObj.name}, ciclo ${cycle} UTC, F${pad(hour)}`;
+        imageEl.src = nextSrc;
+        imageEl.dataset.shown = "1";
+        imageEl.classList.remove("is-hidden");
+        statusNode.hidden = true;
+      };
+      preload.onerror = () => {
+        if (token !== getToken()) return;
+        if (!showing) imageEl.classList.add("is-hidden");
+        statusNode.hidden = false;
+        statusNode.className = "status error";
+        statusNode.textContent = "No se pudo cargar esta imagen.";
+      };
+      preload.src = nextSrc;
+    }
 
+    function updateHourControls() {
+      if (!field || hour == null) return;
+      const index = hours.indexOf(hour);
       readout.innerHTML = `F${pad(hour)}<small>${field.step} ${hour}</small>`;
       hourInput.min = String(hours[0]);
       hourInput.max = String(hours[hours.length - 1]);
       hourInput.value = String(hour);
       prevBtn.disabled = index <= 0;
       nextBtn.disabled = index < 0 || index >= hours.length - 1;
-      subtitle.textContent = field.name;
-
-      const nextSrc = localUrl(hour, version);
-      const showing = img.dataset.shown === "1";
-      if (!showing) {
-        statusEl.className = "status";
-        statusEl.textContent = "Cargando…";
-        statusEl.hidden = false;
+      if (compareMode && fieldB) {
+        subtitle.textContent = `${field.name} · ${fieldB.name}`;
+      } else {
+        subtitle.textContent = field ? field.name : "Campos";
       }
-
-      const preload = new Image();
-      preload.onload = () => {
-        if (token !== requestId) return;
-        img.alt = `${field.name}, ciclo ${cycle} UTC, F${pad(hour)}`;
-        img.src = nextSrc;
-        img.dataset.shown = "1";
-        img.classList.remove("is-hidden");
-        statusEl.hidden = true;
-      };
-      preload.onerror = () => {
-        if (token !== requestId) return;
-        if (!showing) img.classList.add("is-hidden");
-        statusEl.hidden = false;
-        statusEl.className = "status error";
-        statusEl.textContent = "No se pudo cargar esta imagen.";
-      };
-      preload.src = nextSrc;
     }
 
-    function warm(version) {
+    function render() {
+      if (!field || cycle == null || hour == null) return;
+      updateHourControls();
+      requestId += 1;
+      renderPanel(field, img, statusEl, () => requestId, mtimeFrom(cycleInfo), stageLabelA);
+      if (compareMode && fieldB) {
+        requestIdB += 1;
+        renderPanel(fieldB, imgB, statusBEl, () => requestIdB, mtimeFrom(cycleInfoB), stageLabelB);
+      }
+    }
+
+    function warmField(fieldObj, version) {
       for (const value of hours) {
         const preload = new Image();
-        preload.src = localUrl(value, version);
+        preload.src = localUrlFor(fieldObj, value, version);
       }
     }
 
-    async function followCache(token) {
-      const response = await fetch(`/api/cache?field=${field.id}&cycle=${cycle}`, { method: "POST" });
-      if (!response.ok) throw new Error("No se pudo iniciar la caché");
-      let job = await response.json();
-      while (token === session) {
-        renderProgress(job);
-        if (job.complete) {
-          warm(job.mtime || selectedMtime());
-          return;
-        }
-        if (job.error) return;
-        await new Promise((resolve) => setTimeout(resolve, 400));
-        if (token !== session) return;
-        const poll = await fetch(`/api/cache?field=${field.id}&cycle=${cycle}`);
-        job = await poll.json();
+    async function followCaches(token) {
+      const startA = await fetch(`/api/cache?field=${field.id}&cycle=${cycle}`, { method: "POST" });
+      if (!startA.ok) throw new Error("No se pudo iniciar la caché");
+      if (compareMode && fieldB) {
+        const startB = await fetch(`/api/cache?field=${fieldB.id}&cycle=${cycle}`, { method: "POST" });
+        if (!startB.ok) throw new Error("No se pudo iniciar la caché del segundo campo");
       }
+
+      let warmedA = false;
+      let warmedB = false;
+      while (token === session) {
+        const [snapA, snapB] = await Promise.all([
+          fetch(`/api/cache?field=${field.id}&cycle=${cycle}`).then((r) => r.json()),
+          compareMode && fieldB
+            ? fetch(`/api/cache?field=${fieldB.id}&cycle=${cycle}`).then((r) => r.json())
+            : Promise.resolve(null),
+        ]);
+        if (token !== session) return;
+        renderProgress(snapA, snapB);
+        if (snapA.complete && !warmedA) {
+          warmField(field, snapA.mtime || mtimeFrom(cycleInfo));
+          warmedA = true;
+        }
+        if (snapB && snapB.complete && !warmedB) {
+          warmField(fieldB, snapB.mtime || mtimeFrom(cycleInfoB));
+          warmedB = true;
+        }
+        const aDone = snapA.complete || snapA.error;
+        const bDone = !snapB || snapB.complete || snapB.error;
+        if (aDone && bDone) return;
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      }
+    }
+
+    async function fetchFieldStatus(fieldId) {
+      const response = await fetch(`/api/status?field=${encodeURIComponent(fieldId)}`);
+      if (!response.ok) throw new Error("No se pudo leer el campo");
+      return response.json();
     }
 
     async function loadField(fieldId, keepHour) {
       const token = ++session;
-      const response = await fetch(`/api/status?field=${encodeURIComponent(fieldId)}`);
-      if (!response.ok) throw new Error("No se pudo leer el campo");
-      const status = await response.json();
+      const status = await fetchFieldStatus(fieldId);
       if (token !== session) return;
 
       field = status.field;
@@ -550,6 +710,7 @@
       cycleInfo = status.cycles;
       cycle = vigente || cycleInfo.find((item) => item.available)?.cycle || null;
       if (!keepHour || !hours.includes(hour)) hour = hours[0];
+      fieldSelect.value = fieldId;
       if (!cycle) {
         cacheLabel.textContent = "No pude determinar el ciclo vigente. Revisá la VPN.";
         statusEl.className = "status error";
@@ -557,8 +718,30 @@
         return;
       }
       renderCycles();
+      if (compareMode) {
+        const bId = fieldBSelect.value || (fieldsCatalog.find((item) => item.id !== fieldId) || fieldsCatalog[0])?.id;
+        if (bId) await ensureFieldB(bId, token);
+      }
       render();
-      await followCache(token);
+      await followCaches(token);
+    }
+
+    async function ensureFieldB(fieldId, token) {
+      const status = await fetchFieldStatus(fieldId);
+      if (token !== session) return;
+      fieldB = status.field;
+      cycleInfoB = status.cycles;
+      fieldBSelect.value = fieldId;
+      stageLabelB.textContent = fieldB.name;
+    }
+
+    async function loadFieldB(fieldId) {
+      if (!compareMode) return;
+      const token = ++session;
+      await ensureFieldB(fieldId, token);
+      if (token !== session) return;
+      render();
+      await followCaches(token);
     }
 
     async function loadCycle(nextCycle) {
@@ -567,7 +750,7 @@
       cycle = nextCycle;
       renderCycles();
       render();
-      await followCache(token);
+      await followCaches(token);
     }
 
     function step(delta) {
@@ -579,7 +762,26 @@
     }
 
     fieldSelect.addEventListener("change", () => {
-      loadField(fieldSelect.value, false).catch(showFailure);
+      loadField(fieldSelect.value, true).catch(showFailure);
+    });
+
+    fieldBSelect.addEventListener("change", () => {
+      loadFieldB(fieldBSelect.value).catch(showFailure);
+    });
+
+    compareToggle.addEventListener("change", () => {
+      setCompareMode(compareToggle.checked);
+      if (!compareMode) {
+        imgB.classList.add("is-hidden");
+        imgB.dataset.shown = "0";
+        statusBEl.hidden = true;
+        render();
+        if (field) followCaches(++session).catch(showFailure);
+        return;
+      }
+      const defaultB = fieldsCatalog.find((item) => item.id !== fieldSelect.value) || fieldsCatalog[0];
+      if (!defaultB) return;
+      loadFieldB(defaultB.id).catch(showFailure);
     });
 
     cyclesEl.addEventListener("click", (event) => {
@@ -619,21 +821,18 @@
     async function init() {
       const response = await fetch("/api/fields");
       const payload = await response.json();
-      fieldSelect.innerHTML = "";
-      if (!payload.fields || payload.fields.length === 0) {
+      fieldsCatalog = payload.fields || [];
+      if (!fieldsCatalog.length) {
         subtitle.textContent = "Campos";
-        cacheLabel.textContent = "No hay campos configurados. Usá la pestaña Regiones.";
+        cacheLabel.textContent = "No hay campos configurados.";
         statusEl.className = "status";
         statusEl.textContent = "No hay campos disponibles en esta sección.";
         return;
       }
-      for (const item of payload.fields) {
-        const option = document.createElement("option");
-        option.value = item.id;
-        option.textContent = item.name;
-        fieldSelect.appendChild(option);
-      }
-      await loadField(payload.fields[0].id, false);
+      fillFieldSelect(fieldSelect, fieldsCatalog[0].id);
+      fillFieldSelect(fieldBSelect, fieldsCatalog[1]?.id || fieldsCatalog[0].id);
+      setCompareMode(false);
+      await loadField(fieldsCatalog[0].id, false);
     }
 
     const metCyclesEl = document.getElementById("met-cycles");
