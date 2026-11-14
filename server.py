@@ -44,18 +44,39 @@ _file_locks_guard = threading.Lock()
 def load_config():
     with CONFIG_PATH.open(encoding="utf-8") as handle:
         config = json.load(handle)
-    for field in config["fields"]:
+    for field in config.get("fields", []):
         if "hours" in field:
             field["hours"] = [int(hour) for hour in field["hours"]]
         else:
             field["hours"] = list(range(int(field["hour_from"]), int(field["hour_to"]) + 1))
         if not field["hours"]:
             raise ValueError(f"El campo {field['id']} no tiene horas")
+    for field in config.get("region_fields", []):
+        if "hours" in field:
+            field["hours"] = [int(hour) for hour in field["hours"]]
+        else:
+            field["hours"] = list(range(int(field["hour_from"]), int(field["hour_to"]) + 1))
+        if not field["hours"]:
+            raise ValueError(f"El campo regional {field['id']} no tiene horas")
     return config
 
 
 def field_by_id(config, field_id):
-    for field in config["fields"]:
+    for field in config.get("fields", []):
+        if field["id"] == field_id:
+            return field
+    return None
+
+
+def region_by_id(config, region_id):
+    for region in config.get("regions", []):
+        if region["id"] == region_id:
+            return region
+    return None
+
+
+def region_field_by_id(config, field_id):
+    for field in config.get("region_fields", []):
         if field["id"] == field_id:
             return field
     return None
@@ -65,6 +86,39 @@ def remote_url(config, field, cycle, hour):
     return (
         f"{config['base_url']}{field['product']}.{cycle}UTC.F{int(hour):03d}.png"
     )
+
+
+def region_remote_url(config, region, field, cycle, hour):
+    product = field["product_template"].replace("{region}", region["id"])
+    return f"{config['base_url']}{product}.{cycle}UTC.F{int(hour):03d}.png"
+
+
+def region_cache_dir(region_id, field_id, cycle):
+    return CACHE_DIR / "region" / region_id / field_id / cycle
+
+
+def region_image_path(region_id, field_id, cycle, hour):
+    return region_cache_dir(region_id, field_id, cycle) / f"F{int(hour):03d}.png"
+
+
+def region_meta_path(region_id, field_id, cycle):
+    return region_cache_dir(region_id, field_id, cycle) / "meta.json"
+
+
+def read_region_meta(region_id, field_id, cycle):
+    path = region_meta_path(region_id, field_id, cycle)
+    if not path.exists():
+        return None
+    with path.open(encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def write_region_meta(region_id, field_id, cycle, payload):
+    path = region_meta_path(region_id, field_id, cycle)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(payload), encoding="utf-8")
+    os.replace(temporary, path)
 
 
 def cache_dir(field_id, cycle):
@@ -526,12 +580,172 @@ def cycle_report(config, field):
     return payload
 
 
+def region_cycle_report(config, region, field):
+    cache_key = f"region:{region['id']}:{field['id']}"
+    now = time.monotonic()
+    with _status_lock:
+        cached = _status_cache.get(cache_key)
+        if cached and now - cached[0] < STATUS_TTL_SECONDS:
+            return cached[1]
+
+    sentinel = field["hours"][-1]
+
+    def one(cycle):
+        try:
+            mtime = head_mtime(region_remote_url(config, region, field, cycle, sentinel))
+        except Exception as exc:
+            return {"cycle": cycle, "mtime": None, "available": False, "error": str(exc)}
+        return {"cycle": cycle, "mtime": mtime, "available": mtime is not None}
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        cycles = list(pool.map(one, config["cycles"]))
+
+    available = [cycle for cycle in cycles if cycle["available"]]
+    vigente = max(available, key=lambda cycle: cycle["mtime"])["cycle"] if available else None
+    payload = {"vigente": vigente, "cycles": cycles}
+    with _status_lock:
+        _status_cache[cache_key] = (now, payload)
+    return payload
+
+
+def region_cache_is_fresh(region, field, cycle, mtime):
+    meta = read_region_meta(region["id"], field["id"], cycle)
+    if not meta or meta.get("mtime") != mtime or not meta.get("complete"):
+        return False
+    return all(region_image_path(region["id"], field["id"], cycle, hour).exists() for hour in field["hours"])
+
+
+def clear_region_images(region_id, field_id, cycle):
+    directory = region_cache_dir(region_id, field_id, cycle)
+    if not directory.exists():
+        return
+    for path in directory.glob("F*.png"):
+        path.unlink(missing_ok=True)
+
+
+def region_job_key(region_id, field_id, cycle):
+    return ("region", region_id, field_id, cycle)
+
+
+def start_region_cache(config, region, field, cycle):
+    if cycle not in config["cycles"]:
+        raise ValueError("Ciclo desconocido")
+    key = region_job_key(region["id"], field["id"], cycle)
+    with _jobs_lock:
+        current = _jobs.get(key)
+        if current and current["running"]:
+            return job_snapshot(current)
+        job = {
+            "running": True,
+            "complete": False,
+            "done": 0,
+            "total": len(field["hours"]),
+            "mtime": None,
+            "error": None,
+            "ready": threading.Event(),
+        }
+        _jobs[key] = job
+    threading.Thread(
+        target=_fill_region_cache,
+        args=(config, region, field, cycle, job),
+        daemon=True,
+    ).start()
+    return job_snapshot(job)
+
+
+def region_cache_status(region_id, field_id, cycle):
+    with _jobs_lock:
+        job = _jobs.get(region_job_key(region_id, field_id, cycle))
+        if job:
+            return job_snapshot(job)
+    return {
+        "running": False,
+        "complete": False,
+        "done": 0,
+        "total": 0,
+        "mtime": None,
+        "error": None,
+    }
+
+
+def wait_region_ready(region_id, field_id, cycle, timeout=90):
+    with _jobs_lock:
+        job = _jobs.get(region_job_key(region_id, field_id, cycle))
+    if job is None:
+        return None
+    job["ready"].wait(timeout)
+    return job
+
+
+def _fill_region_cache(config, region, field, cycle, job):
+    fresh = False
+    try:
+        sentinel = field["hours"][-1]
+        mtime = head_mtime(region_remote_url(config, region, field, cycle, sentinel))
+        if mtime is None:
+            raise FileNotFoundError("El ciclo no tiene la última imagen publicada")
+        job["mtime"] = mtime
+        fresh = region_cache_is_fresh(region, field, cycle, mtime)
+        if not fresh:
+            meta = read_region_meta(region["id"], field["id"], cycle)
+            if not meta or meta.get("mtime") != mtime:
+                clear_region_images(region["id"], field["id"], cycle)
+            write_region_meta(region["id"], field["id"], cycle, {"mtime": mtime, "complete": False})
+    except Exception as exc:
+        job["error"] = str(exc)
+        job["running"] = False
+        job["ready"].set()
+        return
+
+    job["ready"].set()
+    if fresh:
+        job["done"] = job["total"]
+        job["complete"] = True
+        job["running"] = False
+        return
+
+    def fetch(hour):
+        try:
+            ensure_region_image(config, region, field, cycle, hour)
+            return True
+        except Exception as exc:
+            print(f"cache region {region['id']} {field['id']} {cycle} F{hour:03d}: {exc}", flush=True)
+            return False
+
+    try:
+        failures = 0
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            for ok in pool.map(fetch, field["hours"]):
+                with _jobs_lock:
+                    job["done"] += 1
+                if not ok:
+                    failures += 1
+        if failures:
+            job["error"] = f"No se pudieron guardar {failures} imágenes"
+            return
+        write_region_meta(region["id"], field["id"], cycle, {"mtime": job["mtime"], "complete": True})
+        job["complete"] = True
+        print(f"cache lista region {region['id']} {field['id']} {cycle}UTC ({job['total']} imágenes)", flush=True)
+    finally:
+        job["running"] = False
+
+
+def ensure_region_image(config, region, field, cycle, hour):
+    path = region_image_path(region["id"], field["id"], cycle, hour)
+    lock = file_lock(path)
+    with lock:
+        if path.exists() and path.stat().st_size > 0:
+            return path
+        download(region_remote_url(config, region, field, cycle, hour), path)
+        return path
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         path = urllib.parse.unquote(parsed.path)
         query = urllib.parse.parse_qs(parsed.query)
-        if path in ("/", "/index.html", "/campos") or path == "/meteogramas" or path.startswith("/meteogramas/"):
+        if path in ("/", "/index.html", "/campos") or path == "/meteogramas" or path.startswith("/meteogramas/") or path == "/regiones" or path.startswith("/regiones/"):
             self._send_file(ROOT / "index.html", "text/html; charset=utf-8")
             return
         if path == "/api/fields":
@@ -539,7 +753,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({
                 "fields": [
                     {"id": field["id"], "name": field["name"]}
-                    for field in config["fields"]
+                    for field in config.get("fields", [])
                 ]
             })
             return
@@ -569,6 +783,18 @@ class Handler(BaseHTTPRequestHandler):
             cycle = _one(query, "cycle")
             self._send_json(job_status(meteogram_key(cipi, cycle)))
             return
+        if path == "/api/region/config":
+            self._handle_region_config()
+            return
+        if path == "/api/region/status":
+            self._handle_region_status(query)
+            return
+        if path == "/api/region/cache":
+            region_id = _one(query, "region").upper()
+            field_id = _one(query, "field")
+            cycle = _one(query, "cycle")
+            self._send_json(region_cache_status(region_id, field_id, cycle))
+            return
         if path.startswith("/img/"):
             self._handle_image(path)
             return
@@ -582,6 +808,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/meteogram/cache":
             self._handle_meteogram_cache(query)
+            return
+        if parsed.path == "/api/region/cache":
+            self._handle_region_cache(query)
             return
         self.send_error(404)
 
@@ -631,10 +860,69 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._send_json(start_meteogram_cache(config, cipi, cycle))
 
+    def _handle_region_config(self):
+        config = load_config()
+        self._send_json({
+            "regions": [
+                {"id": r["id"], "name": r["name"], "stations": r["stations"]}
+                for r in config.get("regions", [])
+            ],
+            "fields": [
+                {"id": f["id"], "name": f["name"]}
+                for f in config.get("region_fields", [])
+            ]
+        })
+
+    def _handle_region_status(self, query):
+        config = load_config()
+        region_id = _one(query, "region").upper()
+        field_id = _one(query, "field")
+        region = region_by_id(config, region_id)
+        field = region_field_by_id(config, field_id)
+        if region is None:
+            self.send_error(404, "Región desconocida")
+            return
+        if field is None:
+            self.send_error(404, "Campo desconocido")
+            return
+        report = region_cycle_report(config, region, field)
+        self._send_json({
+            "base_url": config["base_url"],
+            "region": {
+                "id": region["id"],
+                "name": region["name"],
+                "stations": region["stations"],
+            },
+            "field": {
+                "id": field["id"],
+                "name": field["name"],
+                "product_template": field["product_template"],
+                "hours": field["hours"],
+                "step": field["step"],
+            },
+            "vigente": report["vigente"],
+            "cycles": report["cycles"],
+        })
+
+    def _handle_region_cache(self, query):
+        config = load_config()
+        region_id = _one(query, "region").upper()
+        field_id = _one(query, "field")
+        cycle = _one(query, "cycle")
+        region = region_by_id(config, region_id)
+        field = region_field_by_id(config, field_id)
+        if region is None or field is None or cycle not in config["cycles"]:
+            self.send_error(400, "Región, campo o ciclo desconocido")
+            return
+        self._send_json(start_region_cache(config, region, field, cycle))
+
     def _handle_image(self, path):
         parts = path.strip("/").split("/")
         if len(parts) == 4 and parts[1] == "meteogram":
             self._handle_meteogram_image(parts[2].upper(), parts[3])
+            return
+        if len(parts) == 6 and parts[1] == "region":
+            self._handle_region_image(parts[2].upper(), parts[3], parts[4], parts[5])
             return
         if len(parts) != 4:
             self.send_error(404)
@@ -650,22 +938,56 @@ class Handler(BaseHTTPRequestHandler):
         if field is None or cycle not in config["cycles"] or hour not in field["hours"]:
             self.send_error(404)
             return
-        path = image_path(field_id, cycle, hour)
+        fpath = image_path(field_id, cycle, hour)
         with _jobs_lock:
             job = _jobs.get((field_id, cycle))
             running = bool(job and job["running"])
         if not running:
             meta = read_meta(field_id, cycle)
-            if meta and meta.get("complete") and path.exists():
-                self._send_file(path, "image/png")
+            if meta and meta.get("complete") and fpath.exists():
+                self._send_file(fpath, "image/png")
                 return
             start_cache(config, field, cycle)
         job = wait_until_ready(field_id, cycle)
-        if job and job["error"] and not path.exists():
+        if job and job["error"] and not fpath.exists():
             self.send_error(404, job["error"])
             return
         try:
             image = ensure_image(config, field, cycle, hour)
+        except Exception:
+            self.send_error(404, "Imagen no disponible")
+            return
+        self._send_file(image, "image/png")
+
+    def _handle_region_image(self, region_id, field_id, cycle, hour_text):
+        config = load_config()
+        region = region_by_id(config, region_id)
+        field = region_field_by_id(config, field_id)
+        try:
+            hour = int(hour_text)
+        except ValueError:
+            self.send_error(404)
+            return
+        if region is None or field is None or cycle not in config["cycles"] or hour not in field["hours"]:
+            self.send_error(404)
+            return
+        fpath = region_image_path(region_id, field_id, cycle, hour)
+        key = region_job_key(region_id, field_id, cycle)
+        with _jobs_lock:
+            job = _jobs.get(key)
+            running = bool(job and job["running"])
+        if not running:
+            meta = read_region_meta(region_id, field_id, cycle)
+            if meta and meta.get("complete") and fpath.exists():
+                self._send_file(fpath, "image/png")
+                return
+            start_region_cache(config, region, field, cycle)
+        job = wait_region_ready(region_id, field_id, cycle)
+        if job and job["error"] and not fpath.exists():
+            self.send_error(404, job["error"])
+            return
+        try:
+            image = ensure_region_image(config, region, field, cycle, hour)
         except Exception:
             self.send_error(404, "Imagen no disponible")
             return
