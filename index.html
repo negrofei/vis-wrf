@@ -278,6 +278,7 @@
 
   <nav class="tabs">
     <a id="tab-campos" href="/">Campos</a>
+    <a id="tab-regiones" href="/regiones">Regiones</a>
     <a id="tab-meteogramas" href="/meteogramas">Meteogramas</a>
   </nav>
 
@@ -312,6 +313,51 @@
     <div class="status" id="status">Cargando…</div>
     <img id="frame" alt="Pronóstico WRF ARG 4K" class="is-hidden">
   </div>
+  </div>
+
+  <div id="view-regiones" hidden>
+    <div class="controls">
+      <div class="group">
+        <span class="label">Buscar estación</span>
+        <div class="search">
+          <input id="region-station-q" type="search" placeholder="Ej: Aeroparque, Bariloche..." autocomplete="off" aria-label="Buscar estación para ver regiones">
+          <ul class="results" id="region-station-results" hidden></ul>
+        </div>
+      </div>
+      <div class="group">
+        <span class="label">Región</span>
+        <select id="region-select" aria-label="Región"></select>
+      </div>
+      <div class="group">
+        <span class="label">Campo</span>
+        <select id="region-field" aria-label="Campo"></select>
+      </div>
+    </div>
+    <div class="controls">
+      <div class="group">
+        <span class="label">Ciclo</span>
+        <div class="cycles" id="region-cycles" role="group" aria-label="Ciclo del modelo"></div>
+        <span class="label">UTC</span>
+      </div>
+
+      <div class="group nav">
+        <span class="label">Pronóstico</span>
+        <button type="button" id="region-prev" aria-label="Hora anterior">◀</button>
+        <div class="hour-readout" id="region-readout">—</div>
+        <button type="button" id="region-next" aria-label="Hora siguiente">▶</button>
+        <input id="region-hour" type="range" min="0" max="72" value="0" aria-label="Hora de pronóstico">
+      </div>
+    </div>
+
+    <div class="cache-line">
+      <div id="region-cache-label">Seleccioná una región para ver las imágenes.</div>
+      <div class="bar" aria-hidden="true"><span id="region-cache-bar"></span></div>
+    </div>
+
+    <div class="stage">
+      <div class="status" id="region-status">Seleccioná una región para comenzar.</div>
+      <img id="region-frame" alt="Pronóstico WRF ARG 4K - Región" class="is-hidden">
+    </div>
   </div>
 
   <div id="view-meteogramas" hidden>
@@ -574,6 +620,13 @@
       const response = await fetch("/api/fields");
       const payload = await response.json();
       fieldSelect.innerHTML = "";
+      if (!payload.fields || payload.fields.length === 0) {
+        subtitle.textContent = "Campos";
+        cacheLabel.textContent = "No hay campos configurados. Usá la pestaña Regiones.";
+        statusEl.className = "status";
+        statusEl.textContent = "No hay campos disponibles en esta sección.";
+        return;
+      }
       for (const item of payload.fields) {
         const option = document.createElement("option");
         option.value = item.id;
@@ -792,15 +845,361 @@
       if (!document.getElementById("view-meteogramas").hidden) {
         initMeteogramas().catch(showMetFailure);
       }
+      if (!document.getElementById("view-regiones").hidden) {
+        initRegiones().catch(showRegionFailure);
+      }
     });
 
-    const meteogramView = location.pathname === "/meteogramas" || location.pathname.startsWith("/meteogramas/");
-    document.getElementById("view-campos").hidden = meteogramView;
-    document.getElementById("view-meteogramas").hidden = !meteogramView;
-    document.getElementById("tab-campos").classList.toggle("active", !meteogramView);
-    document.getElementById("tab-meteogramas").classList.toggle("active", meteogramView);
+    // === REGIONES VIEW ===
+    const regionSelectEl = document.getElementById("region-select");
+    const regionFieldEl = document.getElementById("region-field");
+    const regionCyclesEl = document.getElementById("region-cycles");
+    const regionImg = document.getElementById("region-frame");
+    const regionStatus = document.getElementById("region-status");
+    const regionCacheLabel = document.getElementById("region-cache-label");
+    const regionCacheBar = document.getElementById("region-cache-bar");
+    const regionHourInput = document.getElementById("region-hour");
+    const regionReadout = document.getElementById("region-readout");
+    const regionPrevBtn = document.getElementById("region-prev");
+    const regionNextBtn = document.getElementById("region-next");
+    const regionStationInput = document.getElementById("region-station-q");
+    const regionStationResults = document.getElementById("region-station-results");
 
-    if (meteogramView) initMeteogramas().catch(showMetFailure);
+    let regionsConfig = [];
+    let regionFieldsConfig = [];
+    let currentRegion = null;
+    let currentRegionField = null;
+    let regionHours = [];
+    let regionCycle = null;
+    let regionHour = null;
+    let regionVigente = null;
+    let regionCycleInfo = [];
+    let regionSession = 0;
+    let regionRequestId = 0;
+    let regionSearchTimer = 0;
+
+    function regionPad(value) {
+      return String(value).padStart(3, "0");
+    }
+
+    function regionLocalUrl(hourValue, version) {
+      const stamp = version ? `?v=${encodeURIComponent(version)}` : "";
+      return `/img/region/${currentRegion.id}/${currentRegionField.id}/${regionCycle}/${hourValue}${stamp}`;
+    }
+
+    function selectedRegionMtime() {
+      const info = regionCycleInfo.find((item) => item.cycle === regionCycle);
+      return info && info.mtime ? info.mtime : "";
+    }
+
+    function renderRegionCycles() {
+      regionCyclesEl.innerHTML = "";
+      for (const id of CYCLES) {
+        const info = regionCycleInfo.find((item) => item.cycle === id);
+        const button = document.createElement("button");
+        button.type = "button";
+        button.dataset.cycle = id;
+        button.setAttribute("aria-pressed", id === regionCycle ? "true" : "false");
+        const badge = id === regionVigente ? "vigente" : "";
+        button.innerHTML = `${id}<span class="badge">${badge}</span>`;
+        if (info && !info.available) button.disabled = true;
+        regionCyclesEl.appendChild(button);
+      }
+    }
+
+    function renderRegionProgress(job) {
+      const total = job.total || regionHours.length || 1;
+      const done = job.done || 0;
+      const pct = Math.round((done / total) * 100);
+      regionCacheBar.style.width = `${job.complete ? 100 : pct}%`;
+      if (job.error) {
+        regionCacheLabel.textContent = job.error;
+        return;
+      }
+      if (job.running && !job.mtime) {
+        regionCacheLabel.textContent = "Revisando cuál es el ciclo más nuevo…";
+        return;
+      }
+      const when = formatTime(job.mtime || selectedRegionMtime());
+      const published = when ? ` · publicado ${when}` : "";
+      if (job.complete) {
+        regionCacheLabel.textContent = `${total} imágenes en caché · ciclo ${regionCycle} UTC${published}`;
+        return;
+      }
+      regionCacheLabel.textContent = `Guardando imágenes ${done}/${total}${published}`;
+    }
+
+    function renderRegion() {
+      if (!currentRegion || !currentRegionField || regionCycle == null || regionHour == null) return;
+      const index = regionHours.indexOf(regionHour);
+      const token = ++regionRequestId;
+      const version = selectedRegionMtime();
+
+      regionReadout.innerHTML = `F${regionPad(regionHour)}<small>${currentRegionField.step} ${regionHour}</small>`;
+      regionHourInput.min = String(regionHours[0]);
+      regionHourInput.max = String(regionHours[regionHours.length - 1]);
+      regionHourInput.value = String(regionHour);
+      regionPrevBtn.disabled = index <= 0;
+      regionNextBtn.disabled = index < 0 || index >= regionHours.length - 1;
+      subtitle.textContent = `${currentRegion.id} - ${currentRegion.name}: ${currentRegionField.name}`;
+
+      const nextSrc = regionLocalUrl(regionHour, version);
+      const showing = regionImg.dataset.shown === "1";
+      if (!showing) {
+        regionStatus.className = "status";
+        regionStatus.textContent = "Cargando…";
+        regionStatus.hidden = false;
+      }
+
+      const preload = new Image();
+      preload.onload = () => {
+        if (token !== regionRequestId) return;
+        regionImg.alt = `${currentRegionField.name}, ${currentRegion.name}, ciclo ${regionCycle} UTC, F${regionPad(regionHour)}`;
+        regionImg.src = nextSrc;
+        regionImg.dataset.shown = "1";
+        regionImg.classList.remove("is-hidden");
+        regionStatus.hidden = true;
+      };
+      preload.onerror = () => {
+        if (token !== regionRequestId) return;
+        if (!showing) regionImg.classList.add("is-hidden");
+        regionStatus.hidden = false;
+        regionStatus.className = "status error";
+        regionStatus.textContent = "No se pudo cargar esta imagen.";
+      };
+      preload.src = nextSrc;
+    }
+
+    function warmRegion(version) {
+      for (const value of regionHours) {
+        const preload = new Image();
+        preload.src = regionLocalUrl(value, version);
+      }
+    }
+
+    async function followRegionCache(token) {
+      const response = await fetch(`/api/region/cache?region=${currentRegion.id}&field=${currentRegionField.id}&cycle=${regionCycle}`, { method: "POST" });
+      if (!response.ok) throw new Error("No se pudo iniciar la caché");
+      let job = await response.json();
+      while (token === regionSession) {
+        renderRegionProgress(job);
+        if (job.complete) {
+          warmRegion(job.mtime || selectedRegionMtime());
+          return;
+        }
+        if (job.error) return;
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        if (token !== regionSession) return;
+        const poll = await fetch(`/api/region/cache?region=${currentRegion.id}&field=${currentRegionField.id}&cycle=${regionCycle}`);
+        job = await poll.json();
+      }
+    }
+
+    async function loadRegion(regionId, fieldId, keepHour) {
+      const token = ++regionSession;
+      const response = await fetch(`/api/region/status?region=${encodeURIComponent(regionId)}&field=${encodeURIComponent(fieldId)}`);
+      if (!response.ok) throw new Error("No se pudo leer la región");
+      const status = await response.json();
+      if (token !== regionSession) return;
+
+      currentRegion = regionsConfig.find(r => r.id === regionId);
+      currentRegionField = status.field;
+      regionHours = status.field.hours;
+      regionVigente = status.vigente;
+      regionCycleInfo = status.cycles;
+      regionCycle = regionVigente || regionCycleInfo.find((item) => item.available)?.cycle || null;
+      if (!keepHour || !regionHours.includes(regionHour)) regionHour = regionHours[0];
+      if (!regionCycle) {
+        regionCacheLabel.textContent = "No pude determinar el ciclo vigente. Revisá la VPN.";
+        regionStatus.className = "status error";
+        regionStatus.textContent = "No hay un ciclo disponible.";
+        return;
+      }
+      regionSelectEl.value = regionId;
+      regionFieldEl.value = fieldId;
+      renderRegionCycles();
+      renderRegion();
+      await followRegionCache(token);
+    }
+
+    async function loadRegionCycle(nextCycle) {
+      if (nextCycle === regionCycle) return;
+      const token = ++regionSession;
+      regionCycle = nextCycle;
+      renderRegionCycles();
+      renderRegion();
+      await followRegionCache(token);
+    }
+
+    function regionStep(delta) {
+      const index = regionHours.indexOf(regionHour);
+      const next = regionHours[index + delta];
+      if (next === undefined) return;
+      regionHour = next;
+      renderRegion();
+    }
+
+    function searchRegionsByStation(query) {
+      const folded = fold(query);
+      if (folded.length < 2) return [];
+      const results = [];
+      for (const region of regionsConfig) {
+        const matchingStations = region.stations.filter(station => {
+          const foldedStation = fold(station);
+          return foldedStation.includes(folded) || folded.includes(foldedStation);
+        });
+        if (matchingStations.length > 0) {
+          results.push({ region, matchingStations });
+        }
+      }
+      return results;
+    }
+
+    function fold(text) {
+      const normalized = text.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      return normalized.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    }
+
+    function renderRegionSearchResults(results) {
+      regionStationResults.innerHTML = "";
+      if (!results.length) {
+        regionStationResults.hidden = true;
+        return;
+      }
+      for (const { region, matchingStations } of results) {
+        const item = document.createElement("li");
+        const button = document.createElement("button");
+        button.type = "button";
+        button.innerHTML = `${region.id} - ${region.name}<small>Estaciones: ${matchingStations.join(", ")}</small>`;
+        button.addEventListener("click", () => {
+          regionStationInput.value = "";
+          regionStationResults.hidden = true;
+          const fieldId = regionFieldEl.value || regionFieldsConfig[0]?.id;
+          const next = `/regiones/${encodeURIComponent(region.id)}`;
+          if (location.pathname !== next) history.pushState({}, "", next);
+          loadRegion(region.id, fieldId, false).catch(showRegionFailure);
+        });
+        item.appendChild(button);
+        regionStationResults.appendChild(item);
+      }
+      regionStationResults.hidden = false;
+    }
+
+    function showRegionFailure(error) {
+      regionStatus.hidden = false;
+      regionStatus.className = "status error";
+      regionStatus.textContent = error.message || "No se pudo cargar la región.";
+    }
+
+    async function initRegiones() {
+      subtitle.textContent = "Regiones";
+      const response = await fetch("/api/region/config");
+      const payload = await response.json();
+      regionsConfig = payload.regions;
+      regionFieldsConfig = payload.fields;
+
+      regionSelectEl.innerHTML = "";
+      for (const region of regionsConfig) {
+        const option = document.createElement("option");
+        option.value = region.id;
+        option.textContent = `${region.id} - ${region.name}`;
+        regionSelectEl.appendChild(option);
+      }
+
+      regionFieldEl.innerHTML = "";
+      for (const field of regionFieldsConfig) {
+        const option = document.createElement("option");
+        option.value = field.id;
+        option.textContent = field.name;
+        regionFieldEl.appendChild(option);
+      }
+
+      const parts = location.pathname.split("/").filter(Boolean);
+      const regionCode = parts[1] ? decodeURIComponent(parts[1]).toUpperCase() : null;
+      const initialRegion = regionCode && regionsConfig.find(r => r.id === regionCode)
+        ? regionCode
+        : regionsConfig[0]?.id;
+
+      if (initialRegion) {
+        await loadRegion(initialRegion, regionFieldsConfig[0]?.id, false);
+      }
+    }
+
+    regionSelectEl.addEventListener("change", () => {
+      const fieldId = regionFieldEl.value || regionFieldsConfig[0]?.id;
+      const next = `/regiones/${encodeURIComponent(regionSelectEl.value)}`;
+      if (location.pathname !== next) history.pushState({}, "", next);
+      loadRegion(regionSelectEl.value, fieldId, false).catch(showRegionFailure);
+    });
+
+    regionFieldEl.addEventListener("change", () => {
+      if (!currentRegion) return;
+      loadRegion(currentRegion.id, regionFieldEl.value, true).catch(showRegionFailure);
+    });
+
+    regionCyclesEl.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-cycle]");
+      if (!button || button.disabled) return;
+      loadRegionCycle(button.dataset.cycle).catch(showRegionFailure);
+    });
+
+    regionPrevBtn.addEventListener("click", () => regionStep(-1));
+    regionNextBtn.addEventListener("click", () => regionStep(1));
+    regionHourInput.addEventListener("input", () => {
+      const value = Number(regionHourInput.value);
+      regionHour = regionHours.reduce((best, item) =>
+        Math.abs(item - value) < Math.abs(best - value) ? item : best
+      );
+      renderRegion();
+    });
+
+    regionStationInput.addEventListener("input", () => {
+      window.clearTimeout(regionSearchTimer);
+      const query = regionStationInput.value.trim();
+      if (query.length < 2) {
+        regionStationResults.hidden = true;
+        return;
+      }
+      regionSearchTimer = window.setTimeout(() => {
+        const results = searchRegionsByStation(query);
+        renderRegionSearchResults(results);
+      }, 180);
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (document.getElementById("view-regiones").hidden) return;
+      if (event.target.closest("input, select, textarea")) return;
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        regionStep(-1);
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        regionStep(1);
+      }
+    });
+
+    // === VIEW ROUTING ===
+    function getCurrentView() {
+      const path = location.pathname;
+      if (path === "/regiones" || path.startsWith("/regiones/")) return "regiones";
+      if (path === "/meteogramas" || path.startsWith("/meteogramas/")) return "meteogramas";
+      return "campos";
+    }
+
+    function showView(view) {
+      document.getElementById("view-campos").hidden = view !== "campos";
+      document.getElementById("view-regiones").hidden = view !== "regiones";
+      document.getElementById("view-meteogramas").hidden = view !== "meteogramas";
+      document.getElementById("tab-campos").classList.toggle("active", view === "campos");
+      document.getElementById("tab-regiones").classList.toggle("active", view === "regiones");
+      document.getElementById("tab-meteogramas").classList.toggle("active", view === "meteogramas");
+    }
+
+    const currentView = getCurrentView();
+    showView(currentView);
+
+    if (currentView === "regiones") initRegiones().catch(showRegionFailure);
+    else if (currentView === "meteogramas") initMeteogramas().catch(showMetFailure);
     else init().catch(showFailure);
   </script>
 </body>

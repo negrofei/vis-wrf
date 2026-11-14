@@ -1,11 +1,12 @@
 {
   "base_url": "https://repo2.smn.gob.ar/archivos/dpa/HPC/prod/intra/",
   "cycles": ["00", "06", "12", "18"],
-  "fields": [
+  "fields": [],
+  "region_fields": [
     {
       "id": "pp01h",
       "name": "Precipitación acumulada horaria",
-      "product": "WRF_ARG4K.FCST_REGION_PP01H_U10_V10_R01",
+      "product_template": "WRF_ARG4K.FCST_REGION_PP01H_U10_V10_{region}",
       "hour_from": 0,
       "hour_to": 72,
       "step": "hora"
@@ -13,9 +14,66 @@
     {
       "id": "pp24h",
       "name": "Precipitación acumulada diaria",
-      "product": "WRF_ARG4K.FCST_REGION_PP24H_WSPD10MAX24H_R01",
+      "product_template": "WRF_ARG4K.FCST_REGION_PP24H_WSPD10MAX24H_{region}",
       "hours": [1, 2, 3],
       "step": "día"
+    }
+  ],
+  "regions": [
+    {
+      "id": "R01",
+      "name": "Buenos Aires Costa",
+      "stations": ["Junin", "Aeroparque", "Palomar", "Ezeiza", "La Plata", "Olavarria", "Tandil", "Villa Gesell", "Necochea", "Mar del Plata", "Bahia Blanca"]
+    },
+    {
+      "id": "R02",
+      "name": "Chubut",
+      "stations": ["Bariloche", "Esquel", "Paso de Indios", "Puerto Madryn", "Trelew", "Comodoro Rivadavia"]
+    },
+    {
+      "id": "R03",
+      "name": "Litoral Sur",
+      "stations": ["Paso de los Libres", "Monte Caseros", "Concordia", "Santa Fe", "Parana", "Rosario", "Gualeguaychu", "Junin", "Aeroparque", "Ezeiza"]
+    },
+    {
+      "id": "R04",
+      "name": "Costa Patagonia Centro",
+      "stations": ["Comodoro Rivadavia", "Puerto Deseado", "Puerto San Julian", "Santa Cruz"]
+    },
+    {
+      "id": "R05",
+      "name": "Costa Patagonia Norte",
+      "stations": ["Necochea", "Bahia Blanca", "Viedma", "San Antonio Oeste", "Puerto Madryn", "Trelew"]
+    },
+    {
+      "id": "R06",
+      "name": "NOA",
+      "stations": ["La Quiaca", "Jujuy", "Salta", "Tucuman"]
+    },
+    {
+      "id": "R07",
+      "name": "Cuyo",
+      "stations": ["Tucuman", "Santiago del Estero", "La Rioja"]
+    },
+    {
+      "id": "R08",
+      "name": "Costa Patagonia Sur",
+      "stations": ["Puerto San Julian", "Santa Cruz", "Rio Gallegos", "Rio Grande", "Ushuaia", "Puerto Argentino"]
+    },
+    {
+      "id": "R09",
+      "name": "Litoral",
+      "stations": ["Las Lomitas", "Formosa", "Resistencia", "Corrientes", "Reconquista", "Mercedes", "Paso de los Libres", "Monte Caseros", "Posadas", "Bernardo de Irigoyen", "Iguazu"]
+    },
+    {
+      "id": "R10",
+      "name": "Rio de la Plata",
+      "stations": ["Aeroparque", "Ezeiza", "La Plata"]
+    },
+    {
+      "id": "R11",
+      "name": "Patagonia Norte",
+      "stations": ["Neuquen", "Chapelco", "Bariloche", "Esquel", "San Antonio Oeste", "Bahia Blanca", "Puerto Madryn", "Trelew"]
     }
   ]
 }
