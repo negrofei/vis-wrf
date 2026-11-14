@@ -1,0 +1,44 @@
+============================================
+         VISOR WRF ARGENTINA - WINDOWS
+============================================
+
+REQUISITOS
+----------
+- Python 3.x instalado y en el PATH
+- Conexión a internet (para descargar imágenes del SMN)
+
+NO requiere dependencias adicionales, usa solo la biblioteca
+estándar de Python.
+
+
+EJECUCION
+---------
+Opción 1 (recomendada):
+  Doble clic en ABRIR_VIS_WRF.vbs
+  → Inicia el servidor en segundo plano y abre el navegador.
+
+Opción 2 (modo consola):
+  Doble clic en EJECUTAR_SERVIDOR.bat
+  → Muestra logs en la consola. Cerrar con Ctrl+C.
+
+
+CERRAR EL SERVIDOR
+------------------
+  Doble clic en CERRAR_SERVIDOR.bat
+  → Cierra el proceso del servidor.
+
+
+CONFIGURACION
+-------------
+- Puerto por defecto: 8765
+- Campos disponibles: editar fields.json
+- Estaciones: PInteres.dat
+
+
+ACTUALIZACION
+-------------
+Si usás git:
+  git pull origin main
+
+Si no tenés git:
+  Descargar el ZIP desde GitHub y reemplazar los archivos.
