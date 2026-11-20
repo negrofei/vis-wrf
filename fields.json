@@ -1,11 +1,16 @@
 {
   "base_url": "https://repo2.smn.gob.ar/archivos/dpa/HPC/prod/intra/",
-  "cycles": ["00", "06", "12", "18"],
+  "cycles": [
+    "00",
+    "06",
+    "12",
+    "18"
+  ],
   "fields": [
     {
       "id": "pp01h",
       "name": "Precipitación",
-      "product": "WRF_ARG4K.FCST_PP01H_SLP_U10_V10",
+      "product": "WRF_ARG4K.FCST_FIELD_PP01H_SLP_U10_V10_ARG",
       "hour_from": 0,
       "hour_to": 72,
       "step": "hora"
@@ -13,7 +18,7 @@
     {
       "id": "q900",
       "name": "Humedad en 900hPa",
-      "product": "WRF_ARG4K.FCST_Q900_U900_V900",
+      "product": "WRF_ARG4K.FCST_FIELD_Q900_U900_V900_ARG",
       "hour_from": 0,
       "hour_to": 72,
       "step": "hora"
@@ -21,7 +26,7 @@
     {
       "id": "rh700",
       "name": "HR y W en 700 hPa",
-      "product": "WRF_ARG4K.FCST_RH700_W700",
+      "product": "WRF_ARG4K.FCST_FIELD_RH700_W700_ARG",
       "hour_from": 0,
       "hour_to": 72,
       "step": "hora"
@@ -29,7 +34,7 @@
     {
       "id": "mucape",
       "name": "MUCAPE",
-      "product": "WRF_ARG4K.FCST_MCAPE_SHEAR_850_500",
+      "product": "WRF_ARG4K.FCST_FIELD_MCAPE_SHEAR_850_500_ARG",
       "hour_from": 0,
       "hour_to": 72,
       "step": "hora"
@@ -37,7 +42,7 @@
     {
       "id": "mucape_brn",
       "name": "MUCAPE y Bulk Richardson",
-      "product": "WRF_ARG4K.FCST_MCAPE_BRN",
+      "product": "WRF_ARG4K.FCST_FIELD_MCAPE_BRN_ARG",
       "hour_from": 0,
       "hour_to": 72,
       "step": "hora"
@@ -45,7 +50,7 @@
     {
       "id": "jet_bajas",
       "name": "Jet capas bajas",
-      "product": "WRF_ARG4K.FCST_V850_SHEAR_850_700_U850_V850",
+      "product": "WRF_ARG4K.FCST_FIELD_V850_SHEAR_850_700_U850_V850_ARG",
       "hour_from": 0,
       "hour_to": 72,
       "step": "hora"
@@ -53,7 +58,7 @@
     {
       "id": "vort500",
       "name": "Vorticidad en 500 hPa",
-      "product": "WRF_ARG4K.FCST_VORT500_TK500_U500_V500",
+      "product": "WRF_ARG4K.FCST_FIELD_VORT500_TK500_U500_V500_ARG",
       "hour_from": 0,
       "hour_to": 72,
       "step": "hora"
@@ -61,7 +66,7 @@
     {
       "id": "colmax",
       "name": "Colmax",
-      "product": "WRF_ARG4K.FCST_MDBZ",
+      "product": "WRF_ARG4K.FCST_FIELD_MDBZ_ARG",
       "hour_from": 0,
       "hour_to": 72,
       "step": "hora"
@@ -69,7 +74,7 @@
     {
       "id": "dbz1000",
       "name": "Reflectividad 1km",
-      "product": "WRF_ARG4K.FCST_DBZ1000",
+      "product": "WRF_ARG4K.FCST_FIELD_DBZ1000_ARG",
       "hour_from": 0,
       "hour_to": 72,
       "step": "hora"
@@ -77,7 +82,7 @@
     {
       "id": "dbz4000",
       "name": "Reflectividad 4km",
-      "product": "WRF_ARG4K.FCST_DBZ4000",
+      "product": "WRF_ARG4K.FCST_FIELD_DBZ4000_ARG",
       "hour_from": 0,
       "hour_to": 72,
       "step": "hora"
@@ -85,7 +90,7 @@
     {
       "id": "pw",
       "name": "Agua precipitable",
-      "product": "WRF_ARG4K.FCST_PW",
+      "product": "WRF_ARG4K.FCST_FIELD_PW_ARG",
       "hour_from": 0,
       "hour_to": 72,
       "step": "hora"
@@ -93,7 +98,7 @@
     {
       "id": "vapor_bajos",
       "name": "Vapor en niveles bajos",
-      "product": "WRF_ARG4K.FCST_CRTM_CH10",
+      "product": "WRF_ARG4K.FCST_FIELD_CRTM_CH10_ARG",
       "hour_from": 0,
       "hour_to": 72,
       "step": "hora"
@@ -101,7 +106,7 @@
     {
       "id": "topes",
       "name": "Topes nubosos",
-      "product": "WRF_ARG4K.FCST_CRTM_CH13",
+      "product": "WRF_ARG4K.FCST_FIELD_CRTM_CH13_ARG",
       "hour_from": 0,
       "hour_to": 72,
       "step": "hora"
@@ -120,7 +125,11 @@
       "id": "pp24h",
       "name": "Precipitación acumulada diaria",
       "product_template": "WRF_ARG4K.FCST_REGION_PP24H_WSPD10MAX24H_{region}",
-      "hours": [1, 2, 3],
+      "hours": [
+        1,
+        2,
+        3
+      ],
       "step": "día"
     }
   ],
@@ -128,57 +137,140 @@
     {
       "id": "R01",
       "name": "Buenos Aires Costa",
-      "stations": ["Junin", "Aeroparque", "Palomar", "Ezeiza", "La Plata", "Olavarria", "Tandil", "Villa Gesell", "Necochea", "Mar del Plata", "Bahia Blanca"]
+      "stations": [
+        "Junin",
+        "Aeroparque",
+        "Palomar",
+        "Ezeiza",
+        "La Plata",
+        "Olavarria",
+        "Tandil",
+        "Villa Gesell",
+        "Necochea",
+        "Mar del Plata",
+        "Bahia Blanca"
+      ]
     },
     {
       "id": "R02",
       "name": "Chubut",
-      "stations": ["Bariloche", "Esquel", "Paso de Indios", "Puerto Madryn", "Trelew", "Comodoro Rivadavia"]
+      "stations": [
+        "Bariloche",
+        "Esquel",
+        "Paso de Indios",
+        "Puerto Madryn",
+        "Trelew",
+        "Comodoro Rivadavia"
+      ]
     },
     {
       "id": "R03",
       "name": "Litoral Sur",
-      "stations": ["Paso de los Libres", "Monte Caseros", "Concordia", "Santa Fe", "Parana", "Rosario", "Gualeguaychu", "Junin", "Aeroparque", "Ezeiza"]
+      "stations": [
+        "Paso de los Libres",
+        "Monte Caseros",
+        "Concordia",
+        "Santa Fe",
+        "Parana",
+        "Rosario",
+        "Gualeguaychu",
+        "Junin",
+        "Aeroparque",
+        "Ezeiza"
+      ]
     },
     {
       "id": "R04",
       "name": "Costa Patagonia Centro",
-      "stations": ["Comodoro Rivadavia", "Puerto Deseado", "Puerto San Julian", "Santa Cruz"]
+      "stations": [
+        "Comodoro Rivadavia",
+        "Puerto Deseado",
+        "Puerto San Julian",
+        "Santa Cruz"
+      ]
     },
     {
       "id": "R05",
       "name": "Costa Patagonia Norte",
-      "stations": ["Necochea", "Bahia Blanca", "Viedma", "San Antonio Oeste", "Puerto Madryn", "Trelew"]
+      "stations": [
+        "Necochea",
+        "Bahia Blanca",
+        "Viedma",
+        "San Antonio Oeste",
+        "Puerto Madryn",
+        "Trelew"
+      ]
     },
     {
       "id": "R06",
       "name": "NOA",
-      "stations": ["La Quiaca", "Jujuy", "Salta", "Tucuman"]
+      "stations": [
+        "La Quiaca",
+        "Jujuy",
+        "Salta",
+        "Tucuman"
+      ]
     },
     {
       "id": "R07",
       "name": "Cuyo",
-      "stations": ["Tucuman", "Santiago del Estero", "La Rioja"]
+      "stations": [
+        "Tucuman",
+        "Santiago del Estero",
+        "La Rioja"
+      ]
     },
     {
       "id": "R08",
       "name": "Costa Patagonia Sur",
-      "stations": ["Puerto San Julian", "Santa Cruz", "Rio Gallegos", "Rio Grande", "Ushuaia", "Puerto Argentino"]
+      "stations": [
+        "Puerto San Julian",
+        "Santa Cruz",
+        "Rio Gallegos",
+        "Rio Grande",
+        "Ushuaia",
+        "Puerto Argentino"
+      ]
     },
     {
       "id": "R09",
       "name": "Litoral",
-      "stations": ["Las Lomitas", "Formosa", "Resistencia", "Corrientes", "Reconquista", "Mercedes", "Paso de los Libres", "Monte Caseros", "Posadas", "Bernardo de Irigoyen", "Iguazu"]
+      "stations": [
+        "Las Lomitas",
+        "Formosa",
+        "Resistencia",
+        "Corrientes",
+        "Reconquista",
+        "Mercedes",
+        "Paso de los Libres",
+        "Monte Caseros",
+        "Posadas",
+        "Bernardo de Irigoyen",
+        "Iguazu"
+      ]
     },
     {
       "id": "R10",
       "name": "Rio de la Plata",
-      "stations": ["Aeroparque", "Ezeiza", "La Plata"]
+      "stations": [
+        "Aeroparque",
+        "Ezeiza",
+        "La Plata"
+      ]
     },
     {
       "id": "R11",
       "name": "Patagonia Norte",
-      "stations": ["Neuquen", "Chapelco", "Bariloche", "Esquel", "San Antonio Oeste", "Bahia Blanca", "Puerto Madryn", "Trelew"]
+      "stations": [
+        "Neuquen",
+        "Chapelco",
+        "Bariloche",
+        "Esquel",
+        "San Antonio Oeste",
+        "Bahia Blanca",
+        "Puerto Madryn",
+        "Trelew"
+      ]
     }
   ]
 }
