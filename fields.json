@@ -98,7 +98,7 @@
     {
       "id": "vapor_bajos",
       "name": "Vapor en niveles bajos",
-      "product": "WRF_ARG4K.FCST_FIELD_CRTM_CH10_ARG",
+      "product": "WRF_ARG4K.FCST_CRTM_CH10_ARG",
       "hour_from": 0,
       "hour_to": 72,
       "step": "hora"
@@ -106,7 +106,7 @@
     {
       "id": "topes",
       "name": "Topes nubosos",
-      "product": "WRF_ARG4K.FCST_FIELD_CRTM_CH13_ARG",
+      "product": "WRF_ARG4K.FCST_CRTM_CH13_ARG",
       "hour_from": 0,
       "hour_to": 72,
       "step": "hora"
