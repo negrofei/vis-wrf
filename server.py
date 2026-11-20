@@ -1030,23 +1030,18 @@ class Handler(BaseHTTPRequestHandler):
         cycle = _one(query, "cycle") or "00"
         hour = int(_one(query, "hour") or "24")
         field = field_by_id(config, field_id)
-        if field and field.get("product", "").startswith("WRF_ARG4K.FCST_"):
-            key = field["product"][len("WRF_ARG4K.FCST_"):]
-        elif field and field.get("product"):
-            key = field["product"]
-        else:
-            key = "PP01H_SLP_U10_V10"
-        stems = []
-        if field and field.get("product"):
-            stems.append(field["product"])
-        stems.extend([
+        raw = (field or {}).get("product") or "WRF_ARG4K.FCST_FIELD_PP01H_SLP_U10_V10_ARG"
+        key = raw
+        if key.startswith("WRF_ARG4K.FCST_FIELD_") and key.endswith("_ARG"):
+            key = key[len("WRF_ARG4K.FCST_FIELD_"):-len("_ARG")]
+        elif key.startswith("WRF_ARG4K.FCST_"):
+            key = key[len("WRF_ARG4K.FCST_"):]
+        stems = [
+            raw,
+            f"WRF_ARG4K.FCST_FIELD_{key}_ARG",
             f"WRF_ARG4K.FCST_{key}",
-            f"WRF_ARG4K.FCST.{key}",
-            f"WRF_ARG4K_{key}",
-            f"WRF_ARG4K.{key}",
-            key,
             "WRF_ARG4K.FCST_REGION_PP01H_U10_V10_R01",
-        ])
+        ]
         seen = set()
         unique = []
         for stem in stems:
