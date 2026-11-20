@@ -712,9 +712,17 @@
       if (!keepHour || !hours.includes(hour)) hour = hours[0];
       fieldSelect.value = fieldId;
       if (!cycle) {
-        cacheLabel.textContent = "No pude determinar el ciclo vigente. Revisá la VPN.";
+        const probeError = cycleInfo.map((item) => item.error).filter(Boolean)[0];
+        const sample = status.sample_url || "";
+        cacheLabel.textContent = probeError
+          ? `No pude hablar con repo2: ${probeError}`
+          : "No encontré imágenes para este producto en repo2. Revisá el nombre o la VPN.";
+        statusEl.hidden = false;
         statusEl.className = "status error";
-        statusEl.textContent = "No hay un ciclo disponible.";
+        statusEl.innerHTML = sample
+          ? `No hay un ciclo disponible.<br><small style="display:block;margin-top:8px;word-break:break-all;color:#5c6b7a">Probé: ${sample}</small>`
+          : "No hay un ciclo disponible.";
+        renderCycles();
         return;
       }
       renderCycles();
