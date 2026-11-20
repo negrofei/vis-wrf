@@ -159,31 +159,104 @@ def file_lock(path):
         return lock
 
 
+def _parse_mtime(raw):
+    if not raw:
+        return None
+    moment = parsedate_to_datetime(raw)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def head_mtime(url):
+    """Return Last-Modified as ISO UTC, or None if the image is missing.
+
+    Tries HEAD first; if the server rejects HEAD or omits Last-Modified,
+    falls back to a ranged GET.
+    """
     last_error = None
     for attempt in range(3):
         request = urllib.request.Request(url, method="HEAD", headers={"User-Agent": USER_AGENT})
         try:
             with urllib.request.urlopen(request, timeout=20) as response:
-                raw = response.headers.get("Last-Modified")
+                mtime = _parse_mtime(response.headers.get("Last-Modified"))
+                if mtime:
+                    return mtime
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                return None
+            # Some servers answer 405/501 for HEAD; try GET below.
+            if exc.code not in (405, 501):
+                last_error = exc
+        except urllib.error.URLError as exc:
+            last_error = exc
+
+        get_request = urllib.request.Request(
+            url,
+            headers={"User-Agent": USER_AGENT, "Range": "bytes=0-0"},
+        )
+        try:
+            with urllib.request.urlopen(get_request, timeout=20) as response:
+                mtime = _parse_mtime(response.headers.get("Last-Modified"))
+                if mtime:
+                    return mtime
+                # Object exists but has no Last-Modified; treat as available now.
+                if response.status in (200, 206):
+                    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
                 return None
             last_error = exc
-            raw = None
         except urllib.error.URLError as exc:
             last_error = exc
-            raw = None
-        if raw:
-            moment = parsedate_to_datetime(raw)
-            if moment.tzinfo is None:
-                moment = moment.replace(tzinfo=timezone.utc)
-            return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
         if attempt < 2:
             time.sleep(0.4)
     if last_error:
         raise last_error
     return None
+
+
+def sentinel_hours(field):
+    hours = list(field["hours"])
+    preferred = []
+    for value in (hours[-1], 48, 24, 12, 6, 1, 0, hours[0]):
+        if value in hours and value not in preferred:
+            preferred.append(value)
+    for value in reversed(hours):
+        if value not in preferred:
+            preferred.append(value)
+    return preferred
+
+
+def probe_field_cycle(config, field, cycle):
+    last_error = None
+    last_url = None
+    for hour in sentinel_hours(field):
+        url = remote_url(config, field, cycle, hour)
+        last_url = url
+        try:
+            mtime = head_mtime(url)
+        except Exception as exc:
+            last_error = str(exc)
+            continue
+        if mtime:
+            return {
+                "cycle": cycle,
+                "mtime": mtime,
+                "available": True,
+                "probe_url": url,
+                "probe_hour": hour,
+            }
+    payload = {
+        "cycle": cycle,
+        "mtime": None,
+        "available": False,
+        "probe_url": last_url,
+    }
+    if last_error:
+        payload["error"] = last_error
+    return payload
 
 
 def download(url, destination):
@@ -560,23 +633,53 @@ def cycle_report(config, field):
         if cached and now - cached[0] < STATUS_TTL_SECONDS:
             return cached[1]
 
-    sentinel = field["hours"][-1]
-
     def one(cycle):
-        try:
-            mtime = head_mtime(remote_url(config, field, cycle, sentinel))
-        except Exception as exc:
-            return {"cycle": cycle, "mtime": None, "available": False, "error": str(exc)}
-        return {"cycle": cycle, "mtime": mtime, "available": mtime is not None}
+        return probe_field_cycle(config, field, cycle)
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         cycles = list(pool.map(one, config["cycles"]))
 
     available = [cycle for cycle in cycles if cycle["available"]]
     vigente = max(available, key=lambda cycle: cycle["mtime"])["cycle"] if available else None
-    payload = {"vigente": vigente, "cycles": cycles}
+    sample_hour = sentinel_hours(field)[0]
+    payload = {
+        "vigente": vigente,
+        "cycles": cycles,
+        "product": field.get("product"),
+        "sample_url": remote_url(config, field, "00", sample_hour),
+    }
     with _status_lock:
         _status_cache[field["id"]] = (now, payload)
+    return payload
+
+
+def probe_region_cycle(config, region, field, cycle):
+    last_error = None
+    last_url = None
+    for hour in sentinel_hours(field):
+        url = region_remote_url(config, region, field, cycle, hour)
+        last_url = url
+        try:
+            mtime = head_mtime(url)
+        except Exception as exc:
+            last_error = str(exc)
+            continue
+        if mtime:
+            return {
+                "cycle": cycle,
+                "mtime": mtime,
+                "available": True,
+                "probe_url": url,
+                "probe_hour": hour,
+            }
+    payload = {
+        "cycle": cycle,
+        "mtime": None,
+        "available": False,
+        "probe_url": last_url,
+    }
+    if last_error:
+        payload["error"] = last_error
     return payload
 
 
@@ -588,21 +691,20 @@ def region_cycle_report(config, region, field):
         if cached and now - cached[0] < STATUS_TTL_SECONDS:
             return cached[1]
 
-    sentinel = field["hours"][-1]
-
     def one(cycle):
-        try:
-            mtime = head_mtime(region_remote_url(config, region, field, cycle, sentinel))
-        except Exception as exc:
-            return {"cycle": cycle, "mtime": None, "available": False, "error": str(exc)}
-        return {"cycle": cycle, "mtime": mtime, "available": mtime is not None}
+        return probe_region_cycle(config, region, field, cycle)
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         cycles = list(pool.map(one, config["cycles"]))
 
     available = [cycle for cycle in cycles if cycle["available"]]
     vigente = max(available, key=lambda cycle: cycle["mtime"])["cycle"] if available else None
-    payload = {"vigente": vigente, "cycles": cycles}
+    sample_hour = sentinel_hours(field)[0]
+    payload = {
+        "vigente": vigente,
+        "cycles": cycles,
+        "sample_url": region_remote_url(config, region, field, "00", sample_hour),
+    }
     with _status_lock:
         _status_cache[cache_key] = (now, payload)
     return payload
@@ -795,6 +897,9 @@ class Handler(BaseHTTPRequestHandler):
             cycle = _one(query, "cycle")
             self._send_json(region_cache_status(region_id, field_id, cycle))
             return
+        if path == "/api/debug/probe":
+            self._handle_debug_probe(query)
+            return
         if path.startswith("/img/"):
             self._handle_image(path)
             return
@@ -832,6 +937,8 @@ class Handler(BaseHTTPRequestHandler):
             },
             "vigente": report["vigente"],
             "cycles": report["cycles"],
+            "sample_url": report.get("sample_url"),
+            "product": report.get("product") or field["product"],
         })
 
     def _handle_cache(self, query):
@@ -915,6 +1022,59 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(400, "Región, campo o ciclo desconocido")
             return
         self._send_json(start_region_cache(config, region, field, cycle))
+
+    def _handle_debug_probe(self, query):
+        """Probe likely product URL variants against repo2 (needs VPN)."""
+        config = load_config()
+        field_id = _one(query, "field") or "pp01h"
+        cycle = _one(query, "cycle") or "00"
+        hour = int(_one(query, "hour") or "24")
+        field = field_by_id(config, field_id)
+        if field and field.get("product", "").startswith("WRF_ARG4K.FCST_"):
+            key = field["product"][len("WRF_ARG4K.FCST_"):]
+        elif field and field.get("product"):
+            key = field["product"]
+        else:
+            key = "PP01H_SLP_U10_V10"
+        stems = []
+        if field and field.get("product"):
+            stems.append(field["product"])
+        stems.extend([
+            f"WRF_ARG4K.FCST_{key}",
+            f"WRF_ARG4K.FCST.{key}",
+            f"WRF_ARG4K_{key}",
+            f"WRF_ARG4K.{key}",
+            key,
+            "WRF_ARG4K.FCST_REGION_PP01H_U10_V10_R01",
+        ])
+        seen = set()
+        unique = []
+        for stem in stems:
+            if stem not in seen:
+                seen.add(stem)
+                unique.append(stem)
+
+        results = []
+        for stem in unique:
+            url = f"{config['base_url']}{stem}.{cycle}UTC.F{hour:03d}.png"
+            entry = {"stem": stem, "url": url}
+            try:
+                mtime = head_mtime(url)
+                entry["ok"] = mtime is not None
+                entry["mtime"] = mtime
+            except Exception as exc:
+                entry["ok"] = False
+                entry["error"] = str(exc)
+            results.append(entry)
+            print(f"probe {stem}: ok={entry.get('ok')} err={entry.get('error')} mtime={entry.get('mtime')}", flush=True)
+
+        self._send_json({
+            "field": field_id,
+            "cycle": cycle,
+            "hour": hour,
+            "results": results,
+            "first_ok": next((item for item in results if item.get("ok")), None),
+        })
 
     def _handle_image(self, path):
         parts = path.strip("/").split("/")
