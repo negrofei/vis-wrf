@@ -30,8 +30,16 @@ STATIONS_PATH = ROOT / "PInteres.dat"
 CACHE_DIR = ROOT / "cache"
 METEOGRAM_PRODUCT = "WRF_ARG4K.FCST_METEOGRAM"
 CIPI_RE = re.compile(r"^[A-Z]{2}\d{2}$")
+SAVIPA_FIR_RE = re.compile(r"^[A-Z]{3}$")
+SAVIPA_FIELD_RE = re.compile(r"^(TURB|ICE)$")
+SAVIPA_FILE_RE = re.compile(
+    r"(?P<fir>[A-Za-z]{3})_(?P<field>TURB|ICE)(?P<level>\d{3})_(?P<time>\d{2})\.png",
+    re.IGNORECASE,
+)
+SAVIPA_LEVEL_RE = re.compile(r"(?:TURB|ICE)(\d{3})", re.IGNORECASE)
 USER_AGENT = "vis-wrf"
 STATUS_TTL_SECONDS = 20
+SAVIPA_LIST_TTL_SECONDS = 60
 
 _status_cache = {}
 _status_lock = threading.Lock()
@@ -899,12 +907,162 @@ def ensure_region_image(config, region, field, cycle, hour):
         return path
 
 
+def savipa_config(config):
+    return config.get("savipa") or {
+        "base_url": "http://dma.smn.gob.ar:8007/aeronautica/KWBC/",
+        "firs": [{"id": code, "name": code} for code in ("CBA", "CRV", "DOZ", "EZE", "SIS")],
+        "fields": [
+            {"id": "TURB", "name": "Turbulencia"},
+            {"id": "ICE", "name": "Hielo"},
+        ],
+    }
+
+
+def savipa_normalize_fir(config, fir):
+    value = (fir or "").strip().upper()
+    allowed = {item["id"].upper() for item in savipa_config(config).get("firs", [])}
+    if not SAVIPA_FIR_RE.match(value) or (allowed and value not in allowed):
+        return None
+    return value
+
+
+def savipa_normalize_field(config, field):
+    value = (field or "").strip().upper()
+    allowed = {item["id"].upper() for item in savipa_config(config).get("fields", [])}
+    if not SAVIPA_FIELD_RE.match(value) or (allowed and value not in allowed):
+        return None
+    return value
+
+
+def savipa_dir_url(config, fir, field):
+    base = savipa_config(config)["base_url"]
+    if not base.endswith("/"):
+        base += "/"
+    return f"{base}{fir}/{field}/"
+
+
+def savipa_remote_url(config, fir, field, level, forecast_time):
+    return (
+        savipa_dir_url(config, fir, field)
+        + f"{fir}_{field}{int(level):03d}_{int(forecast_time):02d}.png"
+    )
+
+
+def savipa_cache_path(fir, field, level, forecast_time):
+    return (
+        CACHE_DIR
+        / "savipa"
+        / fir
+        / field
+        / f"{int(level):03d}"
+        / f"{int(forecast_time):02d}.png"
+    )
+
+
+def fetch_text(url, timeout=30):
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        charset = response.headers.get_content_charset() or "utf-8"
+        return response.read().decode(charset, errors="replace")
+
+
+def parse_savipa_listing(html, fir, field):
+    levels = set()
+    times = set()
+    files = []
+    text = html or ""
+    for match in SAVIPA_FILE_RE.finditer(text):
+        item_fir = match.group("fir").upper()
+        item_field = match.group("field").upper()
+        if item_fir != fir or item_field != field:
+            continue
+        level = int(match.group("level"))
+        forecast_time = int(match.group("time"))
+        levels.add(level)
+        times.add(forecast_time)
+        files.append({
+            "fir": item_fir,
+            "field": item_field,
+            "level": level,
+            "time": forecast_time,
+            "name": match.group(0),
+        })
+    if not levels:
+        for match in SAVIPA_LEVEL_RE.finditer(text):
+            levels.add(int(match.group(1)))
+    if not times:
+        for match in re.finditer(rf"{re.escape(field)}\d{{3}}_(\d{{2}})\.png", text, re.IGNORECASE):
+            times.add(int(match.group(1)))
+        if not times:
+            for match in re.finditer(r"_(\d{2})\.png", text, re.IGNORECASE):
+                times.add(int(match.group(1)))
+    return {
+        "levels": sorted(levels),
+        "times": sorted(times),
+        "files": sorted(files, key=lambda item: (item["level"], item["time"])),
+    }
+
+
+def discover_savipa(config, fir, field):
+    cache_key = f"savipa:{fir}:{field}"
+    now = time.monotonic()
+    with _status_lock:
+        cached = _status_cache.get(cache_key)
+        if cached and now - cached[0] < SAVIPA_LIST_TTL_SECONDS:
+            return cached[1]
+
+    url = savipa_dir_url(config, fir, field)
+    try:
+        html = fetch_text(url)
+        parsed = parse_savipa_listing(html, fir, field)
+        payload = {
+            "fir": fir,
+            "field": field,
+            "source_url": url,
+            "levels": parsed["levels"],
+            "times": parsed["times"],
+            "count": len(parsed["files"]),
+            "error": None,
+        }
+        if not payload["levels"] or not payload["times"]:
+            payload["error"] = "No encontré niveles o tiempos en el listado SAVIPA"
+    except Exception as exc:
+        payload = {
+            "fir": fir,
+            "field": field,
+            "source_url": url,
+            "levels": [],
+            "times": [],
+            "count": 0,
+            "error": str(exc),
+        }
+
+    with _status_lock:
+        _status_cache[cache_key] = (now, payload)
+    return payload
+
+
+def ensure_savipa_image(config, fir, field, level, forecast_time):
+    path = savipa_cache_path(fir, field, level, forecast_time)
+    lock = file_lock(path)
+    with lock:
+        if path.exists() and path.stat().st_size > 0:
+            return path
+        download(savipa_remote_url(config, fir, field, level, forecast_time), path)
+        return path
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         path = urllib.parse.unquote(parsed.path)
         query = urllib.parse.parse_qs(parsed.query)
-        if path in ("/", "/index.html", "/campos") or path == "/meteogramas" or path.startswith("/meteogramas/") or path == "/regiones" or path.startswith("/regiones/"):
+        if (
+            path in ("/", "/index.html", "/campos")
+            or path == "/meteogramas" or path.startswith("/meteogramas/")
+            or path == "/regiones" or path.startswith("/regiones/")
+            or path == "/savipa" or path.startswith("/savipa/")
+        ):
             self._send_file(ROOT / "index.html", "text/html; charset=utf-8")
             return
         if path == "/api/fields":
@@ -960,6 +1118,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/debug/probe":
             self._handle_debug_probe(query)
+            return
+        if path == "/api/savipa/config":
+            self._handle_savipa_config()
+            return
+        if path == "/api/savipa/status":
+            self._handle_savipa_status(query)
             return
         if path.startswith("/img/"):
             self._handle_image(path)
@@ -1143,6 +1307,24 @@ class Handler(BaseHTTPRequestHandler):
             "first_ok": next((item for item in results if item.get("ok")), None),
         })
 
+    def _handle_savipa_config(self):
+        config = load_config()
+        savipa = savipa_config(config)
+        self._send_json({
+            "base_url": savipa.get("base_url"),
+            "firs": savipa.get("firs", []),
+            "fields": savipa.get("fields", []),
+        })
+
+    def _handle_savipa_status(self, query):
+        config = load_config()
+        fir = savipa_normalize_fir(config, _one(query, "fir"))
+        field = savipa_normalize_field(config, _one(query, "field"))
+        if fir is None or field is None:
+            self.send_error(400, "FIR o campo SAVIPA desconocido")
+            return
+        self._send_json(discover_savipa(config, fir, field))
+
     def _handle_image(self, path):
         parts = path.strip("/").split("/")
         if len(parts) == 4 and parts[1] == "meteogram":
@@ -1150,6 +1332,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if len(parts) == 6 and parts[1] == "region":
             self._handle_region_image(parts[2].upper(), parts[3], parts[4], parts[5])
+            return
+        if len(parts) == 6 and parts[1] == "savipa":
+            self._handle_savipa_image(parts[2].upper(), parts[3].upper(), parts[4], parts[5])
             return
         config = load_config()
         # New: /img/{field}/{domain}/{cycle}/{hour}
@@ -1225,6 +1410,30 @@ class Handler(BaseHTTPRequestHandler):
             image = ensure_region_image(config, region, field, cycle, hour)
         except Exception:
             self.send_error(404, "Imagen no disponible")
+            return
+        self._send_file(image, "image/png")
+
+    def _handle_savipa_image(self, fir, field, level_text, time_text):
+        config = load_config()
+        fir = savipa_normalize_fir(config, fir)
+        field = savipa_normalize_field(config, field)
+        try:
+            level = int(level_text)
+            forecast_time = int(time_text)
+        except ValueError:
+            self.send_error(404)
+            return
+        if fir is None or field is None or level < 0 or forecast_time < 0:
+            self.send_error(404)
+            return
+        path = savipa_cache_path(fir, field, level, forecast_time)
+        if path.exists() and path.stat().st_size > 0:
+            self._send_file(path, "image/png")
+            return
+        try:
+            image = ensure_savipa_image(config, fir, field, level, forecast_time)
+        except Exception:
+            self.send_error(404, "Imagen SAVIPA no disponible")
             return
         self._send_file(image, "image/png")
 

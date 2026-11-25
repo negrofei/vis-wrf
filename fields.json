@@ -287,5 +287,19 @@
       "name": "Sur"
     }
   ],
-  "default_domain": "ARG"
+  "default_domain": "ARG",
+  "savipa": {
+    "base_url": "http://dma.smn.gob.ar:8007/aeronautica/KWBC/",
+    "firs": [
+      {"id": "CBA", "name": "CBA"},
+      {"id": "CRV", "name": "CRV"},
+      {"id": "DOZ", "name": "DOZ"},
+      {"id": "EZE", "name": "EZE"},
+      {"id": "SIS", "name": "SIS"}
+    ],
+    "fields": [
+      {"id": "TURB", "name": "Turbulencia"},
+      {"id": "ICE", "name": "Hielo"}
+    ]
+  }
 }

@@ -326,6 +326,36 @@
       display: none;
     }
 
+    .level-nav {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .level-nav button {
+      width: 42px;
+      height: 32px;
+      font-size: 0.95rem;
+      line-height: 1;
+    }
+
+    .level-readout {
+      min-width: 4.8rem;
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+      font-size: 1.1rem;
+      font-weight: 650;
+    }
+
+    .level-readout small {
+      display: block;
+      color: var(--muted);
+      font-size: 0.68rem;
+      font-weight: 500;
+      letter-spacing: 0.04em;
+    }
+
     @media (max-width: 900px) {
       .stage-container:not(.single) {
         flex-direction: column;
@@ -343,6 +373,7 @@
     <a id="tab-campos" href="/">Campos</a>
     <a id="tab-regiones" href="/regiones">Regiones</a>
     <a id="tab-meteogramas" href="/meteogramas">Meteogramas</a>
+    <a id="tab-savipa" href="/savipa">SAVIPA</a>
   </nav>
 
   <div id="view-campos">
@@ -473,6 +504,45 @@
     <div class="stage">
       <div class="status" id="met-status">Buscá por código OACI o por nombre.</div>
       <img id="met-frame" alt="Meteograma WRF" class="is-hidden">
+    </div>
+  </div>
+
+  <div id="view-savipa" hidden>
+    <div class="controls">
+      <div class="group">
+        <span class="label">FIR</span>
+        <select id="savipa-fir" aria-label="FIR"></select>
+      </div>
+      <div class="group">
+        <span class="label">Campo</span>
+        <select id="savipa-field" aria-label="Campo SAVIPA">
+          <option value="TURB">Turbulencia</option>
+          <option value="ICE">Hielo</option>
+        </select>
+      </div>
+      <div class="group">
+        <span class="label">Nivel</span>
+        <div class="level-nav" role="group" aria-label="Nivel vertical">
+          <button type="button" id="savipa-level-up" aria-label="Nivel superior">▲</button>
+          <div class="level-readout" id="savipa-level-readout">—</div>
+          <button type="button" id="savipa-level-down" aria-label="Nivel inferior">▼</button>
+        </div>
+      </div>
+      <div class="group nav">
+        <span class="label">Tiempo</span>
+        <button type="button" id="savipa-prev" aria-label="Tiempo anterior">◀</button>
+        <div class="hour-readout" id="savipa-time-readout">—</div>
+        <button type="button" id="savipa-next" aria-label="Tiempo siguiente">▶</button>
+        <input id="savipa-time" type="range" min="0" max="0" value="0" aria-label="Tiempo de pronóstico SAVIPA">
+      </div>
+    </div>
+    <div class="cache-line">
+      <div id="savipa-cache-label">Seleccioná FIR y campo para cargar SAVIPA.</div>
+      <div class="bar" aria-hidden="true"><span id="savipa-cache-bar"></span></div>
+    </div>
+    <div class="stage">
+      <div class="status" id="savipa-status">Cargando SAVIPA…</div>
+      <img id="savipa-frame" alt="Producto SAVIPA" class="is-hidden">
     </div>
   </div>
 
@@ -1428,11 +1498,252 @@
       }
     });
 
+    // === SAVIPA VIEW ===
+    const savipaFirEl = document.getElementById("savipa-fir");
+    const savipaFieldEl = document.getElementById("savipa-field");
+    const savipaLevelUp = document.getElementById("savipa-level-up");
+    const savipaLevelDown = document.getElementById("savipa-level-down");
+    const savipaLevelReadout = document.getElementById("savipa-level-readout");
+    const savipaPrev = document.getElementById("savipa-prev");
+    const savipaNext = document.getElementById("savipa-next");
+    const savipaTimeReadout = document.getElementById("savipa-time-readout");
+    const savipaTimeInput = document.getElementById("savipa-time");
+    const savipaImg = document.getElementById("savipa-frame");
+    const savipaStatus = document.getElementById("savipa-status");
+    const savipaCacheLabel = document.getElementById("savipa-cache-label");
+    const savipaCacheBar = document.getElementById("savipa-cache-bar");
+
+    let savipaFirs = [];
+    let savipaFields = [];
+    let savipaLevels = [];
+    let savipaTimes = [];
+    let savipaFir = null;
+    let savipaField = null;
+    let savipaLevel = null;
+    let savipaTime = null;
+    let savipaRequest = 0;
+
+    function savipaPadTime(value) {
+      return String(value).padStart(2, "0");
+    }
+
+    function savipaLocalUrl(level, timeValue) {
+      return `/img/savipa/${savipaFir}/${savipaField}/${level}/${savipaPadTime(timeValue)}`;
+    }
+
+    function showSavipaFailure(error) {
+      savipaStatus.hidden = false;
+      savipaStatus.className = "status error";
+      savipaStatus.textContent = error.message || "No se pudo cargar SAVIPA.";
+    }
+
+    function updateSavipaControls() {
+      const levelIndex = savipaLevels.indexOf(savipaLevel);
+      const timeIndex = savipaTimes.indexOf(savipaTime);
+      savipaLevelReadout.innerHTML = savipaLevel == null
+        ? "—"
+        : `${savipaLevel}<small>hPa</small>`;
+      savipaTimeReadout.innerHTML = savipaTime == null
+        ? "—"
+        : `${savipaPadTime(savipaTime)}<small>paso</small>`;
+      savipaLevelUp.disabled = levelIndex <= 0;
+      savipaLevelDown.disabled = levelIndex < 0 || levelIndex >= savipaLevels.length - 1;
+      savipaPrev.disabled = timeIndex <= 0;
+      savipaNext.disabled = timeIndex < 0 || timeIndex >= savipaTimes.length - 1;
+      if (savipaTimes.length) {
+        savipaTimeInput.min = "0";
+        savipaTimeInput.max = String(savipaTimes.length - 1);
+        savipaTimeInput.value = String(Math.max(timeIndex, 0));
+        savipaTimeInput.disabled = false;
+      } else {
+        savipaTimeInput.disabled = true;
+      }
+      subtitle.textContent = savipaFir && savipaField
+        ? `SAVIPA · ${savipaFir} · ${savipaField}`
+        : "SAVIPA";
+    }
+
+    function renderSavipa() {
+      if (!savipaFir || !savipaField || savipaLevel == null || savipaTime == null) return;
+      updateSavipaControls();
+      const token = ++savipaRequest;
+      const src = savipaLocalUrl(savipaLevel, savipaTime);
+      const showing = savipaImg.dataset.shown === "1";
+      if (!showing) {
+        savipaStatus.className = "status";
+        savipaStatus.textContent = "Cargando…";
+        savipaStatus.hidden = false;
+      }
+      const preload = new Image();
+      preload.onload = () => {
+        if (token !== savipaRequest) return;
+        savipaImg.alt = `${savipaFir} ${savipaField} ${savipaLevel} hPa, paso ${savipaPadTime(savipaTime)}`;
+        savipaImg.src = src;
+        savipaImg.dataset.shown = "1";
+        savipaImg.classList.remove("is-hidden");
+        savipaStatus.hidden = true;
+        savipaCacheBar.style.width = "100%";
+        savipaCacheLabel.textContent =
+          `${savipaLevels.length} niveles · ${savipaTimes.length} tiempos · ${savipaFir} ${savipaField}${savipaLevel}_${savipaPadTime(savipaTime)}`;
+      };
+      preload.onerror = () => {
+        if (token !== savipaRequest) return;
+        if (!showing) savipaImg.classList.add("is-hidden");
+        savipaStatus.hidden = false;
+        savipaStatus.className = "status error";
+        savipaStatus.textContent = "No se pudo cargar esta imagen SAVIPA.";
+      };
+      preload.src = src;
+
+      // Prefetch nearby times on the current level.
+      for (const nearby of [-1, 1, 2]) {
+        const idx = savipaTimes.indexOf(savipaTime) + nearby;
+        if (idx < 0 || idx >= savipaTimes.length) continue;
+        const warm = new Image();
+        warm.src = savipaLocalUrl(savipaLevel, savipaTimes[idx]);
+      }
+    }
+
+    function savipaStepTime(delta) {
+      const index = savipaTimes.indexOf(savipaTime);
+      const next = savipaTimes[index + delta];
+      if (next === undefined) return;
+      savipaTime = next;
+      renderSavipa();
+    }
+
+    function savipaStepLevel(delta) {
+      // levels sorted ascending (300, 392, ...); up = lower hPa / higher altitude
+      const index = savipaLevels.indexOf(savipaLevel);
+      const next = savipaLevels[index + delta];
+      if (next === undefined) return;
+      savipaLevel = next;
+      savipaImg.dataset.shown = "0";
+      renderSavipa();
+    }
+
+    async function loadSavipa(keepSelection) {
+      const fir = savipaFirEl.value;
+      const field = savipaFieldEl.value;
+      savipaFir = fir;
+      savipaField = field;
+      savipaCacheLabel.textContent = `Leyendo listado ${fir}/${field}…`;
+      savipaCacheBar.style.width = "20%";
+      savipaStatus.className = "status";
+      savipaStatus.textContent = "Buscando niveles y tiempos…";
+      savipaStatus.hidden = false;
+      savipaImg.classList.add("is-hidden");
+      savipaImg.dataset.shown = "0";
+
+      const response = await fetch(`/api/savipa/status?fir=${encodeURIComponent(fir)}&field=${encodeURIComponent(field)}`);
+      const status = await response.json();
+      if (!response.ok) throw new Error(status.error || "No se pudo leer SAVIPA");
+      if (status.error && (!status.levels.length || !status.times.length)) {
+        throw new Error(status.error);
+      }
+
+      savipaLevels = status.levels || [];
+      savipaTimes = status.times || [];
+      if (!savipaLevels.length || !savipaTimes.length) {
+        throw new Error("No hay imágenes SAVIPA disponibles para esta FIR/campo.");
+      }
+
+      if (!keepSelection || !savipaLevels.includes(savipaLevel)) {
+        savipaLevel = savipaLevels[0];
+      }
+      if (!keepSelection || !savipaTimes.includes(savipaTime)) {
+        savipaTime = savipaTimes[0];
+      }
+
+      const next = `/savipa/${encodeURIComponent(fir)}/${encodeURIComponent(field)}`;
+      if (location.pathname !== next) history.pushState({}, "", next);
+
+      savipaCacheBar.style.width = "60%";
+      savipaCacheLabel.textContent = `Listado OK · ${savipaLevels.length} niveles · ${savipaTimes.length} tiempos`;
+      renderSavipa();
+    }
+
+    async function initSavipa() {
+      subtitle.textContent = "SAVIPA";
+      const response = await fetch("/api/savipa/config");
+      const payload = await response.json();
+      savipaFirs = payload.firs || [];
+      savipaFields = payload.fields || [];
+
+      savipaFirEl.innerHTML = "";
+      for (const item of savipaFirs) {
+        const option = document.createElement("option");
+        option.value = item.id;
+        option.textContent = item.name || item.id;
+        savipaFirEl.appendChild(option);
+      }
+
+      savipaFieldEl.innerHTML = "";
+      for (const item of savipaFields) {
+        const option = document.createElement("option");
+        option.value = item.id;
+        option.textContent = item.name || item.id;
+        savipaFieldEl.appendChild(option);
+      }
+
+      const parts = location.pathname.split("/").filter(Boolean);
+      const pathFir = parts[1] ? decodeURIComponent(parts[1]).toUpperCase() : "";
+      const pathField = parts[2] ? decodeURIComponent(parts[2]).toUpperCase() : "";
+      if (savipaFirs.some((item) => item.id === pathFir)) savipaFirEl.value = pathFir;
+      else if (savipaFirs[0]) savipaFirEl.value = savipaFirs[0].id;
+      if (savipaFields.some((item) => item.id === pathField)) savipaFieldEl.value = pathField;
+      else if (savipaFields[0]) savipaFieldEl.value = savipaFields[0].id;
+
+      await loadSavipa(false);
+    }
+
+    savipaFirEl.addEventListener("change", () => {
+      loadSavipa(false).catch(showSavipaFailure);
+    });
+    savipaFieldEl.addEventListener("change", () => {
+      loadSavipa(false).catch(showSavipaFailure);
+    });
+    savipaLevelUp.addEventListener("click", () => savipaStepLevel(-1));
+    savipaLevelDown.addEventListener("click", () => savipaStepLevel(1));
+    savipaPrev.addEventListener("click", () => savipaStepTime(-1));
+    savipaNext.addEventListener("click", () => savipaStepTime(1));
+    savipaTimeInput.addEventListener("input", () => {
+      const index = Number(savipaTimeInput.value);
+      if (!savipaTimes[index] && savipaTimes[index] !== 0) return;
+      savipaTime = savipaTimes[index];
+      renderSavipa();
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (document.getElementById("view-savipa").hidden) return;
+      if (event.target.closest("input, select, textarea")) return;
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        savipaStepTime(-1);
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        savipaStepTime(1);
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        savipaStepLevel(-1);
+      } else if (event.key === "ArrowDown") {
+        event.preventDefault();
+        savipaStepLevel(1);
+      }
+    });
+
+    window.addEventListener("popstate", () => {
+      if (!document.getElementById("view-savipa").hidden) {
+        initSavipa().catch(showSavipaFailure);
+      }
+    });
+
     // === VIEW ROUTING ===
     function getCurrentView() {
       const path = location.pathname;
       if (path === "/regiones" || path.startsWith("/regiones/")) return "regiones";
       if (path === "/meteogramas" || path.startsWith("/meteogramas/")) return "meteogramas";
+      if (path === "/savipa" || path.startsWith("/savipa/")) return "savipa";
       return "campos";
     }
 
@@ -1440,9 +1751,11 @@
       document.getElementById("view-campos").hidden = view !== "campos";
       document.getElementById("view-regiones").hidden = view !== "regiones";
       document.getElementById("view-meteogramas").hidden = view !== "meteogramas";
+      document.getElementById("view-savipa").hidden = view !== "savipa";
       document.getElementById("tab-campos").classList.toggle("active", view === "campos");
       document.getElementById("tab-regiones").classList.toggle("active", view === "regiones");
       document.getElementById("tab-meteogramas").classList.toggle("active", view === "meteogramas");
+      document.getElementById("tab-savipa").classList.toggle("active", view === "savipa");
     }
 
     const currentView = getCurrentView();
@@ -1450,6 +1763,7 @@
 
     if (currentView === "regiones") initRegiones().catch(showRegionFailure);
     else if (currentView === "meteogramas") initMeteogramas().catch(showMetFailure);
+    else if (currentView === "savipa") initSavipa().catch(showSavipaFailure);
     else init().catch(showFailure);
   </script>
 </body>
