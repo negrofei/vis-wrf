@@ -104,17 +104,36 @@ def normalize_domain(config, domain):
 
 
 def field_product(field, domain):
-    product = field["product"]
+    """Build the repo2 product stem for a field + coverage domain.
+
+    ``field["product"]`` is the base stem without ARG/NOR/SUR.
+    Templates with ``{domain}`` are still accepted for compatibility.
+    """
+    product = (field.get("product") or "").strip()
+    domain = (domain or "ARG").strip().upper()
     if "{domain}" in product:
-        return product.replace("{domain}", domain)
-    if product.endswith("_ARG"):
-        return f"{product[:-4]}_{domain}"
-    return f"{product}_{domain}"
+        resolved = product.replace("{domain}", domain)
+    elif product.endswith(("_ARG", "_NOR", "_SUR")):
+        resolved = product[:-4] + "_" + domain
+    else:
+        resolved = product + "_" + domain
+    if "{domain}" in resolved or "{" in resolved or "}" in resolved:
+        raise ValueError(f"Producto sin resolver: {resolved!r}")
+    return resolved
 
 
 def remote_url(config, field, cycle, hour, domain):
     product = field_product(field, domain)
-    return f"{config['base_url']}{product}.{cycle}UTC.F{int(hour):03d}.png"
+    # Avoid f-strings here so a leftover "{domain}" can never be interpolated.
+    return (
+        config["base_url"]
+        + product
+        + "."
+        + str(cycle)
+        + "UTC.F"
+        + format(int(hour), "03d")
+        + ".png"
+    )
 
 
 def region_remote_url(config, region, field, cycle, hour):
