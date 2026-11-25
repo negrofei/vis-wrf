@@ -10,7 +10,7 @@
     {
       "id": "pp01h",
       "name": "Precipitación",
-      "product": "WRF_ARG4K.FCST_FIELD_PP01H_SLP_U10_V10_{domain}",
+      "product": "WRF_ARG4K.FCST_FIELD_PP01H_SLP_U10_V10",
       "hour_from": 0,
       "hour_to": 72,
       "step": "hora"
@@ -18,7 +18,7 @@
     {
       "id": "q900",
       "name": "Humedad en 900hPa",
-      "product": "WRF_ARG4K.FCST_FIELD_Q900_U900_V900_{domain}",
+      "product": "WRF_ARG4K.FCST_FIELD_Q900_U900_V900",
       "hour_from": 0,
       "hour_to": 72,
       "step": "hora"
@@ -26,7 +26,7 @@
     {
       "id": "rh700",
       "name": "HR y W en 700 hPa",
-      "product": "WRF_ARG4K.FCST_FIELD_RH700_W700_{domain}",
+      "product": "WRF_ARG4K.FCST_FIELD_RH700_W700",
       "hour_from": 0,
       "hour_to": 72,
       "step": "hora"
@@ -34,7 +34,7 @@
     {
       "id": "mucape",
       "name": "MUCAPE",
-      "product": "WRF_ARG4K.FCST_FIELD_MCAPE_SHEAR_850_500_{domain}",
+      "product": "WRF_ARG4K.FCST_FIELD_MCAPE_SHEAR_850_500",
       "hour_from": 0,
       "hour_to": 72,
       "step": "hora"
@@ -42,7 +42,7 @@
     {
       "id": "mucape_brn",
       "name": "MUCAPE y Bulk Richardson",
-      "product": "WRF_ARG4K.FCST_FIELD_MCAPE_BRN_{domain}",
+      "product": "WRF_ARG4K.FCST_FIELD_MCAPE_BRN",
       "hour_from": 0,
       "hour_to": 72,
       "step": "hora"
@@ -50,7 +50,7 @@
     {
       "id": "jet_bajas",
       "name": "Jet capas bajas",
-      "product": "WRF_ARG4K.FCST_FIELD_V850_SHEAR_850_700_U850_V850_{domain}",
+      "product": "WRF_ARG4K.FCST_FIELD_V850_SHEAR_850_700_U850_V850",
       "hour_from": 0,
       "hour_to": 72,
       "step": "hora"
@@ -58,7 +58,7 @@
     {
       "id": "vort500",
       "name": "Vorticidad en 500 hPa",
-      "product": "WRF_ARG4K.FCST_FIELD_VORT500_TK500_U500_V500_{domain}",
+      "product": "WRF_ARG4K.FCST_FIELD_VORT500_TK500_U500_V500",
       "hour_from": 0,
       "hour_to": 72,
       "step": "hora"
@@ -66,7 +66,7 @@
     {
       "id": "colmax",
       "name": "Colmax",
-      "product": "WRF_ARG4K.FCST_FIELD_MDBZ_{domain}",
+      "product": "WRF_ARG4K.FCST_FIELD_MDBZ",
       "hour_from": 0,
       "hour_to": 72,
       "step": "hora"
@@ -74,7 +74,7 @@
     {
       "id": "dbz1000",
       "name": "Reflectividad 1km",
-      "product": "WRF_ARG4K.FCST_FIELD_DBZ1000_{domain}",
+      "product": "WRF_ARG4K.FCST_FIELD_DBZ1000",
       "hour_from": 0,
       "hour_to": 72,
       "step": "hora"
@@ -82,7 +82,7 @@
     {
       "id": "dbz4000",
       "name": "Reflectividad 4km",
-      "product": "WRF_ARG4K.FCST_FIELD_DBZ4000_{domain}",
+      "product": "WRF_ARG4K.FCST_FIELD_DBZ4000",
       "hour_from": 0,
       "hour_to": 72,
       "step": "hora"
@@ -90,7 +90,7 @@
     {
       "id": "pw",
       "name": "Agua precipitable",
-      "product": "WRF_ARG4K.FCST_FIELD_PW_{domain}",
+      "product": "WRF_ARG4K.FCST_FIELD_PW",
       "hour_from": 0,
       "hour_to": 72,
       "step": "hora"
@@ -98,7 +98,7 @@
     {
       "id": "vapor_bajos",
       "name": "Vapor en niveles bajos",
-      "product": "WRF_ARG4K.FCST_CRTM_CH10_{domain}",
+      "product": "WRF_ARG4K.FCST_CRTM_CH10",
       "hour_from": 0,
       "hour_to": 72,
       "step": "hora"
@@ -106,7 +106,7 @@
     {
       "id": "topes",
       "name": "Topes nubosos",
-      "product": "WRF_ARG4K.FCST_CRTM_CH13_{domain}",
+      "product": "WRF_ARG4K.FCST_CRTM_CH13",
       "hour_from": 0,
       "hour_to": 72,
       "step": "hora"
