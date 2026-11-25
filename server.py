@@ -969,7 +969,7 @@ def fetch_text(url, timeout=30):
 def parse_savipa_listing(html, fir, field):
     levels = set()
     times = set()
-    files = []
+    files_by_key = {}
     text = html or ""
     for match in SAVIPA_FILE_RE.finditer(text):
         item_fir = match.group("fir").upper()
@@ -980,13 +980,14 @@ def parse_savipa_listing(html, fir, field):
         forecast_time = int(match.group("time"))
         levels.add(level)
         times.add(forecast_time)
-        files.append({
+        key = (level, forecast_time)
+        files_by_key[key] = {
             "fir": item_fir,
             "field": item_field,
             "level": level,
             "time": forecast_time,
             "name": match.group(0),
-        })
+        }
     if not levels:
         for match in SAVIPA_LEVEL_RE.finditer(text):
             levels.add(int(match.group(1)))
@@ -996,32 +997,45 @@ def parse_savipa_listing(html, fir, field):
         if not times:
             for match in re.finditer(r"_(\d{2})\.png", text, re.IGNORECASE):
                 times.add(int(match.group(1)))
+    files = sorted(files_by_key.values(), key=lambda item: (item["level"], item["time"]))
     return {
         "levels": sorted(levels),
         "times": sorted(times),
-        "files": sorted(files, key=lambda item: (item["level"], item["time"])),
+        "files": files,
     }
 
 
-def discover_savipa(config, fir, field):
+def discover_savipa(config, fir, field, force=False):
     cache_key = f"savipa:{fir}:{field}"
     now = time.monotonic()
-    with _status_lock:
-        cached = _status_cache.get(cache_key)
-        if cached and now - cached[0] < SAVIPA_LIST_TTL_SECONDS:
-            return cached[1]
+    if not force:
+        with _status_lock:
+            cached = _status_cache.get(cache_key)
+            if cached and now - cached[0] < SAVIPA_LIST_TTL_SECONDS:
+                return cached[1]
 
     url = savipa_dir_url(config, fir, field)
     try:
         html = fetch_text(url)
         parsed = parse_savipa_listing(html, fir, field)
+        files = [
+            {"level": item["level"], "time": item["time"]}
+            for item in parsed["files"]
+        ]
+        if not files and parsed["levels"] and parsed["times"]:
+            files = [
+                {"level": level, "time": forecast_time}
+                for level in parsed["levels"]
+                for forecast_time in parsed["times"]
+            ]
         payload = {
             "fir": fir,
             "field": field,
             "source_url": url,
             "levels": parsed["levels"],
             "times": parsed["times"],
-            "count": len(parsed["files"]),
+            "files": files,
+            "count": len(files),
             "error": None,
         }
         if not payload["levels"] or not payload["times"]:
@@ -1033,6 +1047,7 @@ def discover_savipa(config, fir, field):
             "source_url": url,
             "levels": [],
             "times": [],
+            "files": [],
             "count": 0,
             "error": str(exc),
         }
@@ -1042,14 +1057,195 @@ def discover_savipa(config, fir, field):
     return payload
 
 
-def ensure_savipa_image(config, fir, field, level, forecast_time):
+def savipa_meta_path(fir, field):
+    return CACHE_DIR / "savipa" / fir / field / "meta.json"
+
+
+def clear_savipa_images(fir, field):
+    directory = CACHE_DIR / "savipa" / fir / field
+    if not directory.exists():
+        return
+    for path in directory.rglob("*.png"):
+        path.unlink(missing_ok=True)
+    meta = savipa_meta_path(fir, field)
+    meta.unlink(missing_ok=True)
+
+
+def savipa_job_key(fir, field):
+    return ("savipa", fir, field)
+
+
+def savipa_files_cached(fir, field, files):
+    if not files:
+        return False
+    return all(
+        savipa_cache_path(fir, field, item["level"], item["time"]).exists()
+        for item in files
+    )
+
+
+def savipa_cache_is_fresh(fir, field, files):
+    meta = read_json(savipa_meta_path(fir, field))
+    if not meta or not meta.get("complete"):
+        return False
+    if meta.get("total") not in (None, len(files)):
+        return False
+    return savipa_files_cached(fir, field, files)
+
+
+def ensure_savipa_image(config, fir, field, level, forecast_time, force=False):
     path = savipa_cache_path(fir, field, level, forecast_time)
     lock = file_lock(path)
     with lock:
-        if path.exists() and path.stat().st_size > 0:
+        if not force and path.exists() and path.stat().st_size > 0:
             return path
+        if force and path.exists():
+            path.unlink(missing_ok=True)
         download(savipa_remote_url(config, fir, field, level, forecast_time), path)
         return path
+
+
+def start_savipa_cache(config, fir, field, force=False):
+    key = savipa_job_key(fir, field)
+    with _jobs_lock:
+        current = _jobs.get(key)
+        if current and current["running"]:
+            return job_snapshot(current)
+        job = {
+            "running": True,
+            "complete": False,
+            "done": 0,
+            "total": 0,
+            "mtime": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "error": None,
+            "force": bool(force),
+            "ready": threading.Event(),
+        }
+        _jobs[key] = job
+    threading.Thread(
+        target=_fill_savipa_cache,
+        args=(config, fir, field, force, job),
+        daemon=True,
+    ).start()
+    return job_snapshot(job)
+
+
+def savipa_cache_status(fir, field):
+    with _jobs_lock:
+        job = _jobs.get(savipa_job_key(fir, field))
+        if job:
+            return job_snapshot(job)
+    meta = read_json(savipa_meta_path(fir, field))
+    if meta and meta.get("complete"):
+        return {
+            "running": False,
+            "complete": True,
+            "done": meta.get("total", 0),
+            "total": meta.get("total", 0),
+            "mtime": meta.get("mtime"),
+            "error": None,
+        }
+    return {
+        "running": False,
+        "complete": False,
+        "done": 0,
+        "total": 0,
+        "mtime": None,
+        "error": None,
+    }
+
+
+def _fill_savipa_cache(config, fir, field, force, job):
+    try:
+        if force:
+            with _status_lock:
+                _status_cache.pop(f"savipa:{fir}:{field}", None)
+            clear_savipa_images(fir, field)
+
+        discovery = discover_savipa(config, fir, field, force=force)
+        if discovery.get("error") and not discovery.get("files"):
+            raise FileNotFoundError(discovery["error"])
+
+        files = discovery.get("files") or []
+        if not files:
+            files = [
+                {"level": level, "time": forecast_time}
+                for level in discovery.get("levels", [])
+                for forecast_time in discovery.get("times", [])
+            ]
+        job["total"] = len(files)
+        if not force and savipa_cache_is_fresh(fir, field, files):
+            meta = read_json(savipa_meta_path(fir, field)) or {}
+            job["mtime"] = meta.get("mtime") or job["mtime"]
+            job["done"] = job["total"]
+            job["complete"] = True
+            job["running"] = False
+            job["ready"].set()
+            return
+
+        job["mtime"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        write_json(
+            savipa_meta_path(fir, field),
+            {
+                "mtime": job["mtime"],
+                "complete": False,
+                "total": job["total"],
+                "force": bool(force),
+            },
+        )
+    except Exception as exc:
+        job["error"] = str(exc)
+        job["running"] = False
+        job["ready"].set()
+        return
+
+    job["ready"].set()
+
+    def fetch(item):
+        try:
+            ensure_savipa_image(
+                config,
+                fir,
+                field,
+                item["level"],
+                item["time"],
+                force=force,
+            )
+            return True
+        except Exception as exc:
+            print(
+                f"cache savipa {fir} {field} {item['level']:03d}_{item['time']:02d}: {exc}",
+                flush=True,
+            )
+            return False
+
+    try:
+        failures = 0
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            for ok in pool.map(fetch, files):
+                with _jobs_lock:
+                    job["done"] += 1
+                if not ok:
+                    failures += 1
+        if failures:
+            job["error"] = f"No se pudieron guardar {failures} imágenes SAVIPA"
+            return
+        write_json(
+            savipa_meta_path(fir, field),
+            {
+                "mtime": job["mtime"],
+                "complete": True,
+                "total": job["total"],
+                "force": bool(force),
+            },
+        )
+        job["complete"] = True
+        print(
+            f"cache lista savipa {fir} {field} ({job['total']} imágenes)",
+            flush=True,
+        )
+    finally:
+        job["running"] = False
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -1125,6 +1321,15 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/savipa/status":
             self._handle_savipa_status(query)
             return
+        if path == "/api/savipa/cache":
+            config = load_config()
+            fir = savipa_normalize_fir(config, _one(query, "fir"))
+            field = savipa_normalize_field(config, _one(query, "field"))
+            if fir is None or field is None:
+                self.send_error(400, "FIR o campo SAVIPA desconocido")
+                return
+            self._send_json(savipa_cache_status(fir, field))
+            return
         if path.startswith("/img/"):
             self._handle_image(path)
             return
@@ -1141,6 +1346,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/region/cache":
             self._handle_region_cache(query)
+            return
+        if parsed.path == "/api/savipa/cache":
+            self._handle_savipa_cache(query)
             return
         self.send_error(404)
 
@@ -1320,10 +1528,21 @@ class Handler(BaseHTTPRequestHandler):
         config = load_config()
         fir = savipa_normalize_fir(config, _one(query, "fir"))
         field = savipa_normalize_field(config, _one(query, "field"))
+        force = _one(query, "force") in ("1", "true", "yes")
         if fir is None or field is None:
             self.send_error(400, "FIR o campo SAVIPA desconocido")
             return
-        self._send_json(discover_savipa(config, fir, field))
+        self._send_json(discover_savipa(config, fir, field, force=force))
+
+    def _handle_savipa_cache(self, query):
+        config = load_config()
+        fir = savipa_normalize_fir(config, _one(query, "fir"))
+        field = savipa_normalize_field(config, _one(query, "field"))
+        force = _one(query, "force") in ("1", "true", "yes")
+        if fir is None or field is None:
+            self.send_error(400, "FIR o campo SAVIPA desconocido")
+            return
+        self._send_json(start_savipa_cache(config, fir, field, force=force))
 
     def _handle_image(self, path):
         parts = path.strip("/").split("/")

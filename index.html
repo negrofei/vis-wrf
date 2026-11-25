@@ -535,6 +535,10 @@
         <button type="button" id="savipa-next" aria-label="Tiempo siguiente">▶</button>
         <input id="savipa-time" type="range" min="0" max="0" value="0" aria-label="Tiempo de pronóstico SAVIPA">
       </div>
+      <div class="group">
+        <span class="label">Caché</span>
+        <button type="button" id="savipa-refresh" aria-label="Actualizar imágenes SAVIPA">Actualizar</button>
+      </div>
     </div>
     <div class="cache-line">
       <div id="savipa-cache-label">Seleccioná FIR y campo para cargar SAVIPA.</div>
@@ -1508,6 +1512,7 @@
     const savipaNext = document.getElementById("savipa-next");
     const savipaTimeReadout = document.getElementById("savipa-time-readout");
     const savipaTimeInput = document.getElementById("savipa-time");
+    const savipaRefreshBtn = document.getElementById("savipa-refresh");
     const savipaImg = document.getElementById("savipa-frame");
     const savipaStatus = document.getElementById("savipa-status");
     const savipaCacheLabel = document.getElementById("savipa-cache-label");
@@ -1517,24 +1522,58 @@
     let savipaFields = [];
     let savipaLevels = [];
     let savipaTimes = [];
+    let savipaFiles = [];
     let savipaFir = null;
     let savipaField = null;
     let savipaLevel = null;
     let savipaTime = null;
     let savipaRequest = 0;
+    let savipaSession = 0;
+    let savipaVersion = "";
 
     function savipaPadTime(value) {
       return String(value).padStart(2, "0");
     }
 
     function savipaLocalUrl(level, timeValue) {
-      return `/img/savipa/${savipaFir}/${savipaField}/${level}/${savipaPadTime(timeValue)}`;
+      const stamp = savipaVersion ? `?v=${encodeURIComponent(savipaVersion)}` : "";
+      return `/img/savipa/${savipaFir}/${savipaField}/${level}/${savipaPadTime(timeValue)}${stamp}`;
     }
 
     function showSavipaFailure(error) {
       savipaStatus.hidden = false;
       savipaStatus.className = "status error";
       savipaStatus.textContent = error.message || "No se pudo cargar SAVIPA.";
+      savipaRefreshBtn.disabled = false;
+    }
+
+    function renderSavipaProgress(job) {
+      const total = job.total || savipaFiles.length || 1;
+      const done = job.done || 0;
+      const pct = Math.round((done / Math.max(total, 1)) * 100);
+      savipaCacheBar.style.width = `${job.complete ? 100 : pct}%`;
+      if (job.error) {
+        savipaCacheLabel.textContent = job.error;
+        return;
+      }
+      if (job.complete) {
+        savipaCacheLabel.textContent =
+          `${total} imágenes en caché · ${savipaFir} ${savipaField}` +
+          (savipaVersion ? ` · actualizado ${formatTime(savipaVersion)}` : "");
+        return;
+      }
+      if (job.running) {
+        savipaCacheLabel.textContent = `Descargando SAVIPA ${done}/${total}`;
+        return;
+      }
+      savipaCacheLabel.textContent = "Preparando descarga SAVIPA…";
+    }
+
+    function warmSavipaAll() {
+      for (const item of savipaFiles) {
+        const preload = new Image();
+        preload.src = savipaLocalUrl(item.level, item.time);
+      }
     }
 
     function updateSavipaControls() {
@@ -1582,9 +1621,6 @@
         savipaImg.dataset.shown = "1";
         savipaImg.classList.remove("is-hidden");
         savipaStatus.hidden = true;
-        savipaCacheBar.style.width = "100%";
-        savipaCacheLabel.textContent =
-          `${savipaLevels.length} niveles · ${savipaTimes.length} tiempos · ${savipaFir} ${savipaField}${savipaLevel}_${savipaPadTime(savipaTime)}`;
       };
       preload.onerror = () => {
         if (token !== savipaRequest) return;
@@ -1594,14 +1630,6 @@
         savipaStatus.textContent = "No se pudo cargar esta imagen SAVIPA.";
       };
       preload.src = src;
-
-      // Prefetch nearby times on the current level.
-      for (const nearby of [-1, 1, 2]) {
-        const idx = savipaTimes.indexOf(savipaTime) + nearby;
-        if (idx < 0 || idx >= savipaTimes.length) continue;
-        const warm = new Image();
-        warm.src = savipaLocalUrl(savipaLevel, savipaTimes[idx]);
-      }
     }
 
     function savipaStepTime(delta) {
@@ -1622,20 +1650,51 @@
       renderSavipa();
     }
 
-    async function loadSavipa(keepSelection) {
+    async function followSavipaCache(token, force) {
+      const qs = `fir=${encodeURIComponent(savipaFir)}&field=${encodeURIComponent(savipaField)}`;
+      const start = await fetch(`/api/savipa/cache?${qs}${force ? "&force=1" : ""}`, { method: "POST" });
+      if (!start.ok) throw new Error("No se pudo iniciar la caché SAVIPA");
+      let job = await start.json();
+      while (token === savipaSession) {
+        renderSavipaProgress(job);
+        if (job.complete) {
+          if (job.mtime) savipaVersion = job.mtime;
+          warmSavipaAll();
+          renderSavipa();
+          savipaRefreshBtn.disabled = false;
+          return;
+        }
+        if (job.error) {
+          savipaRefreshBtn.disabled = false;
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        if (token !== savipaSession) return;
+        const poll = await fetch(`/api/savipa/cache?${qs}`);
+        job = await poll.json();
+      }
+    }
+
+    async function loadSavipa(keepSelection, force) {
       const fir = savipaFirEl.value;
       const field = savipaFieldEl.value;
+      const token = ++savipaSession;
       savipaFir = fir;
       savipaField = field;
-      savipaCacheLabel.textContent = `Leyendo listado ${fir}/${field}…`;
-      savipaCacheBar.style.width = "20%";
+      savipaRefreshBtn.disabled = true;
+      savipaCacheLabel.textContent = force
+        ? `Actualizando listado ${fir}/${field}…`
+        : `Leyendo listado ${fir}/${field}…`;
+      savipaCacheBar.style.width = "15%";
       savipaStatus.className = "status";
-      savipaStatus.textContent = "Buscando niveles y tiempos…";
+      savipaStatus.textContent = force ? "Forzando descarga…" : "Buscando niveles y tiempos…";
       savipaStatus.hidden = false;
       savipaImg.classList.add("is-hidden");
       savipaImg.dataset.shown = "0";
 
-      const response = await fetch(`/api/savipa/status?fir=${encodeURIComponent(fir)}&field=${encodeURIComponent(field)}`);
+      const response = await fetch(
+        `/api/savipa/status?fir=${encodeURIComponent(fir)}&field=${encodeURIComponent(field)}${force ? "&force=1" : ""}`
+      );
       const status = await response.json();
       if (!response.ok) throw new Error(status.error || "No se pudo leer SAVIPA");
       if (status.error && (!status.levels.length || !status.times.length)) {
@@ -1644,6 +1703,15 @@
 
       savipaLevels = status.levels || [];
       savipaTimes = status.times || [];
+      savipaFiles = status.files || [];
+      if (!savipaFiles.length && savipaLevels.length && savipaTimes.length) {
+        savipaFiles = [];
+        for (const level of savipaLevels) {
+          for (const timeValue of savipaTimes) {
+            savipaFiles.push({ level, time: timeValue });
+          }
+        }
+      }
       if (!savipaLevels.length || !savipaTimes.length) {
         throw new Error("No hay imágenes SAVIPA disponibles para esta FIR/campo.");
       }
@@ -1658,9 +1726,10 @@
       const next = `/savipa/${encodeURIComponent(fir)}/${encodeURIComponent(field)}`;
       if (location.pathname !== next) history.pushState({}, "", next);
 
-      savipaCacheBar.style.width = "60%";
-      savipaCacheLabel.textContent = `Listado OK · ${savipaLevels.length} niveles · ${savipaTimes.length} tiempos`;
+      savipaCacheLabel.textContent =
+        `Listado OK · ${savipaLevels.length} niveles · ${savipaTimes.length} tiempos · ${savipaFiles.length} imágenes`;
       renderSavipa();
+      await followSavipaCache(token, Boolean(force));
     }
 
     async function initSavipa() {
@@ -1694,14 +1763,17 @@
       if (savipaFields.some((item) => item.id === pathField)) savipaFieldEl.value = pathField;
       else if (savipaFields[0]) savipaFieldEl.value = savipaFields[0].id;
 
-      await loadSavipa(false);
+      await loadSavipa(false, false);
     }
 
     savipaFirEl.addEventListener("change", () => {
-      loadSavipa(false).catch(showSavipaFailure);
+      loadSavipa(false, false).catch(showSavipaFailure);
     });
     savipaFieldEl.addEventListener("change", () => {
-      loadSavipa(false).catch(showSavipaFailure);
+      loadSavipa(false, false).catch(showSavipaFailure);
+    });
+    savipaRefreshBtn.addEventListener("click", () => {
+      loadSavipa(true, true).catch(showSavipaFailure);
     });
     savipaLevelUp.addEventListener("click", () => savipaStepLevel(-1));
     savipaLevelDown.addEventListener("click", () => savipaStepLevel(1));
