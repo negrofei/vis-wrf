@@ -82,10 +82,39 @@ def region_field_by_id(config, field_id):
     return None
 
 
-def remote_url(config, field, cycle, hour):
-    return (
-        f"{config['base_url']}{field['product']}.{cycle}UTC.F{int(hour):03d}.png"
-    )
+def field_domains(config):
+    domains = config.get("domains") or [
+        {"id": "ARG", "name": "Todo el territorio"},
+        {"id": "NOR", "name": "Norte"},
+        {"id": "SUR", "name": "Sur"},
+    ]
+    return domains
+
+
+def default_domain(config):
+    return config.get("default_domain") or "ARG"
+
+
+def normalize_domain(config, domain):
+    value = (domain or default_domain(config)).strip().upper()
+    allowed = {item["id"].upper() for item in field_domains(config)}
+    if value not in allowed:
+        return None
+    return value
+
+
+def field_product(field, domain):
+    product = field["product"]
+    if "{domain}" in product:
+        return product.replace("{domain}", domain)
+    if product.endswith("_ARG"):
+        return f"{product[:-4]}_{domain}"
+    return f"{product}_{domain}"
+
+
+def remote_url(config, field, cycle, hour, domain):
+    product = field_product(field, domain)
+    return f"{config['base_url']}{product}.{cycle}UTC.F{int(hour):03d}.png"
 
 
 def region_remote_url(config, region, field, cycle, hour):
@@ -121,32 +150,36 @@ def write_region_meta(region_id, field_id, cycle, payload):
     os.replace(temporary, path)
 
 
-def cache_dir(field_id, cycle):
-    return CACHE_DIR / field_id / cycle
+def cache_dir(field_id, domain, cycle):
+    return CACHE_DIR / field_id / domain / cycle
 
 
-def image_path(field_id, cycle, hour):
-    return cache_dir(field_id, cycle) / f"F{int(hour):03d}.png"
+def image_path(field_id, domain, cycle, hour):
+    return cache_dir(field_id, domain, cycle) / f"F{int(hour):03d}.png"
 
 
-def meta_path(field_id, cycle):
-    return cache_dir(field_id, cycle) / "meta.json"
+def meta_path(field_id, domain, cycle):
+    return cache_dir(field_id, domain, cycle) / "meta.json"
 
 
-def read_meta(field_id, cycle):
-    path = meta_path(field_id, cycle)
+def read_meta(field_id, domain, cycle):
+    path = meta_path(field_id, domain, cycle)
     if not path.exists():
         return None
     with path.open(encoding="utf-8") as handle:
         return json.load(handle)
 
 
-def write_meta(field_id, cycle, payload):
-    path = meta_path(field_id, cycle)
+def write_meta(field_id, domain, cycle, payload):
+    path = meta_path(field_id, domain, cycle)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".json.tmp")
     temporary.write_text(json.dumps(payload), encoding="utf-8")
     os.replace(temporary, path)
+
+
+def field_job_key(field_id, domain, cycle):
+    return (field_id, domain, cycle)
 
 
 def file_lock(path):
@@ -229,11 +262,11 @@ def sentinel_hours(field):
     return preferred
 
 
-def probe_field_cycle(config, field, cycle):
+def probe_field_cycle(config, field, cycle, domain):
     last_error = None
     last_url = None
     for hour in sentinel_hours(field):
-        url = remote_url(config, field, cycle, hour)
+        url = remote_url(config, field, cycle, hour, domain)
         last_url = url
         try:
             mtime = head_mtime(url)
@@ -272,25 +305,25 @@ def download(url, destination):
         raise
 
 
-def ensure_image(config, field, cycle, hour):
-    path = image_path(field["id"], cycle, hour)
+def ensure_image(config, field, cycle, hour, domain):
+    path = image_path(field["id"], domain, cycle, hour)
     lock = file_lock(path)
     with lock:
         if path.exists() and path.stat().st_size > 0:
             return path
-        download(remote_url(config, field, cycle, hour), path)
+        download(remote_url(config, field, cycle, hour, domain), path)
         return path
 
 
-def cache_is_fresh(field, cycle, mtime):
-    meta = read_meta(field["id"], cycle)
+def cache_is_fresh(field, domain, cycle, mtime):
+    meta = read_meta(field["id"], domain, cycle)
     if not meta or meta.get("mtime") != mtime or not meta.get("complete"):
         return False
-    return all(image_path(field["id"], cycle, hour).exists() for hour in field["hours"])
+    return all(image_path(field["id"], domain, cycle, hour).exists() for hour in field["hours"])
 
 
-def clear_images(field_id, cycle):
-    directory = cache_dir(field_id, cycle)
+def clear_images(field_id, domain, cycle):
+    directory = cache_dir(field_id, domain, cycle)
     if not directory.exists():
         return
     for path in directory.glob("F*.png"):
@@ -308,10 +341,12 @@ def job_snapshot(job):
     }
 
 
-def start_cache(config, field, cycle):
+def start_cache(config, field, cycle, domain):
     if cycle not in config["cycles"]:
         raise ValueError("Ciclo desconocido")
-    key = (field["id"], cycle)
+    if normalize_domain(config, domain) is None:
+        raise ValueError("Dominio desconocido")
+    key = field_job_key(field["id"], domain, cycle)
     with _jobs_lock:
         current = _jobs.get(key)
         if current and current["running"]:
@@ -328,15 +363,15 @@ def start_cache(config, field, cycle):
         _jobs[key] = job
     threading.Thread(
         target=_fill_cache,
-        args=(config, field, cycle, job),
+        args=(config, field, cycle, domain, job),
         daemon=True,
     ).start()
     return job_snapshot(job)
 
 
-def cache_status(field_id, cycle):
+def cache_status(field_id, domain, cycle):
     with _jobs_lock:
-        job = _jobs.get((field_id, cycle))
+        job = _jobs.get(field_job_key(field_id, domain, cycle))
         if job:
             return job_snapshot(job)
     return {
@@ -349,29 +384,29 @@ def cache_status(field_id, cycle):
     }
 
 
-def wait_until_ready(field_id, cycle, timeout=90):
+def wait_until_ready(field_id, domain, cycle, timeout=90):
     with _jobs_lock:
-        job = _jobs.get((field_id, cycle))
+        job = _jobs.get(field_job_key(field_id, domain, cycle))
     if job is None:
         return None
     job["ready"].wait(timeout)
     return job
 
 
-def _fill_cache(config, field, cycle, job):
+def _fill_cache(config, field, cycle, domain, job):
     fresh = False
     try:
         sentinel = field["hours"][-1]
-        mtime = head_mtime(remote_url(config, field, cycle, sentinel))
+        mtime = head_mtime(remote_url(config, field, cycle, sentinel, domain))
         if mtime is None:
             raise FileNotFoundError("El ciclo no tiene la última imagen publicada")
         job["mtime"] = mtime
-        fresh = cache_is_fresh(field, cycle, mtime)
+        fresh = cache_is_fresh(field, domain, cycle, mtime)
         if not fresh:
-            meta = read_meta(field["id"], cycle)
+            meta = read_meta(field["id"], domain, cycle)
             if not meta or meta.get("mtime") != mtime:
-                clear_images(field["id"], cycle)
-            write_meta(field["id"], cycle, {"mtime": mtime, "complete": False})
+                clear_images(field["id"], domain, cycle)
+            write_meta(field["id"], domain, cycle, {"mtime": mtime, "complete": False})
     except Exception as exc:
         job["error"] = str(exc)
         job["running"] = False
@@ -387,10 +422,10 @@ def _fill_cache(config, field, cycle, job):
 
     def fetch(hour):
         try:
-            ensure_image(config, field, cycle, hour)
+            ensure_image(config, field, cycle, hour, domain)
             return True
         except Exception as exc:
-            print(f"cache {field['id']} {cycle} F{hour:03d}: {exc}", flush=True)
+            print(f"cache {field['id']} {domain} {cycle} F{hour:03d}: {exc}", flush=True)
             return False
 
     try:
@@ -404,9 +439,9 @@ def _fill_cache(config, field, cycle, job):
         if failures:
             job["error"] = f"No se pudieron guardar {failures} imágenes"
             return
-        write_meta(field["id"], cycle, {"mtime": job["mtime"], "complete": True})
+        write_meta(field["id"], domain, cycle, {"mtime": job["mtime"], "complete": True})
         job["complete"] = True
-        print(f"cache lista {field['id']} {cycle}UTC ({job['total']} imágenes)", flush=True)
+        print(f"cache lista {field['id']} {domain} {cycle}UTC ({job['total']} imágenes)", flush=True)
     finally:
         job["running"] = False
 
@@ -626,15 +661,16 @@ def meteogram_cycles(config, cipi):
     return payload
 
 
-def cycle_report(config, field):
+def cycle_report(config, field, domain):
+    cache_key = f"{field['id']}:{domain}"
     now = time.monotonic()
     with _status_lock:
-        cached = _status_cache.get(field["id"])
+        cached = _status_cache.get(cache_key)
         if cached and now - cached[0] < STATUS_TTL_SECONDS:
             return cached[1]
 
     def one(cycle):
-        return probe_field_cycle(config, field, cycle)
+        return probe_field_cycle(config, field, cycle, domain)
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         cycles = list(pool.map(one, config["cycles"]))
@@ -642,14 +678,16 @@ def cycle_report(config, field):
     available = [cycle for cycle in cycles if cycle["available"]]
     vigente = max(available, key=lambda cycle: cycle["mtime"])["cycle"] if available else None
     sample_hour = sentinel_hours(field)[0]
+    product = field_product(field, domain)
     payload = {
         "vigente": vigente,
         "cycles": cycles,
-        "product": field.get("product"),
-        "sample_url": remote_url(config, field, "00", sample_hour),
+        "domain": domain,
+        "product": product,
+        "sample_url": remote_url(config, field, "00", sample_hour, domain),
     }
     with _status_lock:
-        _status_cache[field["id"]] = (now, payload)
+        _status_cache[cache_key] = (now, payload)
     return payload
 
 
@@ -856,16 +894,20 @@ class Handler(BaseHTTPRequestHandler):
                 "fields": [
                     {"id": field["id"], "name": field["name"]}
                     for field in config.get("fields", [])
-                ]
+                ],
+                "domains": field_domains(config),
+                "default_domain": default_domain(config),
             })
             return
         if path == "/api/status":
             self._handle_status(query)
             return
         if path == "/api/cache":
+            config = load_config()
             field_id = _one(query, "field")
             cycle = _one(query, "cycle")
-            self._send_json(cache_status(field_id, cycle))
+            domain = normalize_domain(config, _one(query, "domain")) or default_domain(config)
+            self._send_json(cache_status(field_id, domain, cycle))
             return
         if path == "/api/stations":
             self._send_json({"stations": search_stations(_one(query, "q"))})
@@ -922,33 +964,42 @@ class Handler(BaseHTTPRequestHandler):
     def _handle_status(self, query):
         config = load_config()
         field = field_by_id(config, _one(query, "field"))
+        domain = normalize_domain(config, _one(query, "domain"))
         if field is None:
             self.send_error(404, "Campo desconocido")
             return
-        report = cycle_report(config, field)
+        if domain is None:
+            self.send_error(400, "Dominio desconocido")
+            return
+        report = cycle_report(config, field, domain)
+        product = field_product(field, domain)
         self._send_json({
             "base_url": config["base_url"],
+            "domain": domain,
+            "domains": field_domains(config),
             "field": {
                 "id": field["id"],
                 "name": field["name"],
-                "product": field["product"],
+                "product": product,
+                "product_template": field["product"],
                 "hours": field["hours"],
                 "step": field["step"],
             },
             "vigente": report["vigente"],
             "cycles": report["cycles"],
             "sample_url": report.get("sample_url"),
-            "product": report.get("product") or field["product"],
+            "product": product,
         })
 
     def _handle_cache(self, query):
         config = load_config()
         field = field_by_id(config, _one(query, "field"))
         cycle = _one(query, "cycle")
-        if field is None or cycle not in config["cycles"]:
-            self.send_error(400, "Campo o ciclo desconocido")
+        domain = normalize_domain(config, _one(query, "domain"))
+        if field is None or cycle not in config["cycles"] or domain is None:
+            self.send_error(400, "Campo, dominio o ciclo desconocido")
             return
-        self._send_json(start_cache(config, field, cycle))
+        self._send_json(start_cache(config, field, cycle, domain))
 
     def _handle_meteogram_status(self, query):
         config = load_config()
@@ -1029,17 +1080,19 @@ class Handler(BaseHTTPRequestHandler):
         field_id = _one(query, "field") or "pp01h"
         cycle = _one(query, "cycle") or "00"
         hour = int(_one(query, "hour") or "24")
+        domain = normalize_domain(config, _one(query, "domain")) or default_domain(config)
         field = field_by_id(config, field_id)
-        raw = (field or {}).get("product") or "WRF_ARG4K.FCST_FIELD_PP01H_SLP_U10_V10_ARG"
+        raw = field_product(field, domain) if field else f"WRF_ARG4K.FCST_FIELD_PP01H_SLP_U10_V10_{domain}"
         key = raw
-        if key.startswith("WRF_ARG4K.FCST_FIELD_") and key.endswith("_ARG"):
-            key = key[len("WRF_ARG4K.FCST_FIELD_"):-len("_ARG")]
-        elif key.startswith("WRF_ARG4K.FCST_"):
-            key = key[len("WRF_ARG4K.FCST_"):]
+        if key.startswith("WRF_ARG4K.FCST_FIELD_") and key.endswith(f"_{domain}"):
+            key = key[len("WRF_ARG4K.FCST_FIELD_"):-(len(domain) + 1)]
+        elif key.startswith("WRF_ARG4K.FCST_") and key.endswith(f"_{domain}"):
+            key = key[len("WRF_ARG4K.FCST_"):-(len(domain) + 1)]
         stems = [
             raw,
-            f"WRF_ARG4K.FCST_FIELD_{key}_ARG",
-            f"WRF_ARG4K.FCST_{key}",
+            f"WRF_ARG4K.FCST_FIELD_{key}_{domain}",
+            f"WRF_ARG4K.FCST_{key}_{domain}",
+            f"WRF_ARG4K.FCST_CRTM_{key}_{domain}" if "CRTM" not in key else raw,
             "WRF_ARG4K.FCST_REGION_PP01H_U10_V10_R01",
         ]
         seen = set()
@@ -1079,36 +1132,44 @@ class Handler(BaseHTTPRequestHandler):
         if len(parts) == 6 and parts[1] == "region":
             self._handle_region_image(parts[2].upper(), parts[3], parts[4], parts[5])
             return
-        if len(parts) != 4:
+        config = load_config()
+        # New: /img/{field}/{domain}/{cycle}/{hour}
+        # Legacy fallback: /img/{field}/{cycle}/{hour} -> domain ARG
+        if len(parts) == 5:
+            _, field_id, domain_text, cycle, hour_text = parts
+            domain = normalize_domain(config, domain_text)
+        elif len(parts) == 4:
+            _, field_id, cycle, hour_text = parts
+            domain = default_domain(config)
+        else:
             self.send_error(404)
             return
-        _, field_id, cycle, hour_text = parts
-        config = load_config()
         field = field_by_id(config, field_id)
         try:
             hour = int(hour_text)
         except ValueError:
             self.send_error(404)
             return
-        if field is None or cycle not in config["cycles"] or hour not in field["hours"]:
+        if field is None or domain is None or cycle not in config["cycles"] or hour not in field["hours"]:
             self.send_error(404)
             return
-        fpath = image_path(field_id, cycle, hour)
+        fpath = image_path(field_id, domain, cycle, hour)
+        key = field_job_key(field_id, domain, cycle)
         with _jobs_lock:
-            job = _jobs.get((field_id, cycle))
+            job = _jobs.get(key)
             running = bool(job and job["running"])
         if not running:
-            meta = read_meta(field_id, cycle)
+            meta = read_meta(field_id, domain, cycle)
             if meta and meta.get("complete") and fpath.exists():
                 self._send_file(fpath, "image/png")
                 return
-            start_cache(config, field, cycle)
-        job = wait_until_ready(field_id, cycle)
+            start_cache(config, field, cycle, domain)
+        job = wait_until_ready(field_id, domain, cycle)
         if job and job["error"] and not fpath.exists():
             self.send_error(404, job["error"])
             return
         try:
-            image = ensure_image(config, field, cycle, hour)
+            image = ensure_image(config, field, cycle, hour, domain)
         except Exception:
             self.send_error(404, "Imagen no disponible")
             return

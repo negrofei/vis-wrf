@@ -363,6 +363,15 @@
     </div>
 
     <div class="group">
+      <span class="label">Cobertura</span>
+      <select id="domain" aria-label="Cobertura geográfica">
+        <option value="ARG" selected>ARG — Todo el territorio</option>
+        <option value="NOR">NOR — Norte</option>
+        <option value="SUR">SUR — Sur</option>
+      </select>
+    </div>
+
+    <div class="group">
       <span class="label">Ciclo</span>
       <div class="cycles" id="cycles" role="group" aria-label="Ciclo del modelo"></div>
       <span class="label">UTC</span>
@@ -473,6 +482,7 @@
     const fieldSelect = document.getElementById("field");
     const fieldBSelect = document.getElementById("field-b");
     const fieldBGroup = document.getElementById("field-b-group");
+    const domainSelect = document.getElementById("domain");
     const compareToggle = document.getElementById("compare-toggle");
     const stageContainer = document.getElementById("stage-container");
     const stageLabelA = document.getElementById("stage-label-a");
@@ -491,11 +501,13 @@
     const cacheBar = document.getElementById("cache-bar");
 
     let fieldsCatalog = [];
+    let domainsCatalog = [];
     let field = null;
     let fieldB = null;
     let hours = [];
     let cycle = null;
     let hour = null;
+    let domain = "ARG";
     let vigente = null;
     let cycleInfo = [];
     let cycleInfoB = [];
@@ -510,7 +522,21 @@
 
     function localUrlFor(fieldObj, hourValue, version) {
       const stamp = version ? `?v=${encodeURIComponent(version)}` : "";
-      return `/img/${fieldObj.id}/${cycle}/${hourValue}${stamp}`;
+      return `/img/${fieldObj.id}/${domain}/${cycle}/${hourValue}${stamp}`;
+    }
+
+    function fillDomainSelect(selectedId) {
+      if (!domainsCatalog.length) return;
+      domainSelect.innerHTML = "";
+      for (const item of domainsCatalog) {
+        const option = document.createElement("option");
+        option.value = item.id;
+        option.textContent = `${item.id} — ${item.name}`;
+        if (item.id === selectedId) option.selected = true;
+        domainSelect.appendChild(option);
+      }
+      domain = selectedId || domainsCatalog[0].id;
+      domainSelect.value = domain;
     }
 
     function formatTime(iso) {
@@ -586,10 +612,10 @@
       const when = formatTime(jobA.mtime || mtimeFrom(cycleInfo));
       const published = when ? ` · publicado ${when}` : "";
       if (complete) {
-        cacheLabel.textContent = `${total} imágenes en caché · ciclo ${cycle} UTC${published}`;
+        cacheLabel.textContent = `${total} imágenes en caché · ${domain} · ciclo ${cycle} UTC${published}`;
         return;
       }
-      cacheLabel.textContent = `Guardando imágenes ${done}/${total}${published}`;
+      cacheLabel.textContent = `Guardando imágenes ${done}/${total} · ${domain}${published}`;
     }
 
     function renderPanel(fieldObj, imageEl, statusNode, getToken, version, labelEl) {
@@ -634,10 +660,11 @@
       hourInput.value = String(hour);
       prevBtn.disabled = index <= 0;
       nextBtn.disabled = index < 0 || index >= hours.length - 1;
+      const domainLabel = domain || "ARG";
       if (compareMode && fieldB) {
-        subtitle.textContent = `${field.name} · ${fieldB.name}`;
+        subtitle.textContent = `${field.name} · ${fieldB.name} · ${domainLabel}`;
       } else {
-        subtitle.textContent = field ? field.name : "Campos";
+        subtitle.textContent = field ? `${field.name} · ${domainLabel}` : "Campos";
       }
     }
 
@@ -660,10 +687,11 @@
     }
 
     async function followCaches(token) {
-      const startA = await fetch(`/api/cache?field=${field.id}&cycle=${cycle}`, { method: "POST" });
+      const domainQ = `&domain=${encodeURIComponent(domain)}`;
+      const startA = await fetch(`/api/cache?field=${field.id}&cycle=${cycle}${domainQ}`, { method: "POST" });
       if (!startA.ok) throw new Error("No se pudo iniciar la caché");
       if (compareMode && fieldB) {
-        const startB = await fetch(`/api/cache?field=${fieldB.id}&cycle=${cycle}`, { method: "POST" });
+        const startB = await fetch(`/api/cache?field=${fieldB.id}&cycle=${cycle}${domainQ}`, { method: "POST" });
         if (!startB.ok) throw new Error("No se pudo iniciar la caché del segundo campo");
       }
 
@@ -671,9 +699,9 @@
       let warmedB = false;
       while (token === session) {
         const [snapA, snapB] = await Promise.all([
-          fetch(`/api/cache?field=${field.id}&cycle=${cycle}`).then((r) => r.json()),
+          fetch(`/api/cache?field=${field.id}&cycle=${cycle}${domainQ}`).then((r) => r.json()),
           compareMode && fieldB
-            ? fetch(`/api/cache?field=${fieldB.id}&cycle=${cycle}`).then((r) => r.json())
+            ? fetch(`/api/cache?field=${fieldB.id}&cycle=${cycle}${domainQ}`).then((r) => r.json())
             : Promise.resolve(null),
         ]);
         if (token !== session) return;
@@ -694,7 +722,7 @@
     }
 
     async function fetchFieldStatus(fieldId) {
-      const response = await fetch(`/api/status?field=${encodeURIComponent(fieldId)}`);
+      const response = await fetch(`/api/status?field=${encodeURIComponent(fieldId)}&domain=${encodeURIComponent(domain)}`);
       if (!response.ok) throw new Error("No se pudo leer el campo");
       return response.json();
     }
@@ -777,6 +805,15 @@
       loadFieldB(fieldBSelect.value).catch(showFailure);
     });
 
+    domainSelect.addEventListener("change", () => {
+      domain = domainSelect.value;
+      img.dataset.shown = "0";
+      imgB.dataset.shown = "0";
+      if (field) {
+        loadField(fieldSelect.value, true).catch(showFailure);
+      }
+    });
+
     compareToggle.addEventListener("change", () => {
       setCompareMode(compareToggle.checked);
       if (!compareMode) {
@@ -830,6 +867,12 @@
       const response = await fetch("/api/fields");
       const payload = await response.json();
       fieldsCatalog = payload.fields || [];
+      domainsCatalog = payload.domains || [
+        { id: "ARG", name: "Todo el territorio" },
+        { id: "NOR", name: "Norte" },
+        { id: "SUR", name: "Sur" },
+      ];
+      fillDomainSelect(payload.default_domain || "ARG");
       if (!fieldsCatalog.length) {
         subtitle.textContent = "Campos";
         cacheLabel.textContent = "No hay campos configurados.";
